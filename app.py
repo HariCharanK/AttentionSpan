@@ -258,7 +258,7 @@ if __name__ == "__main__":
     init_db()
     threading.Thread(target=background_loop, daemon=True).start()
     server = ThreadingHTTPServer(("127.0.0.1", PORT), Handler)
-    print(f"Paper Swipe: http://127.0.0.1:{PORT}", flush=True)
+    print(f"AttentionSpan: http://127.0.0.1:{PORT}", flush=True)
     try:
         server.serve_forever()
     except KeyboardInterrupt:

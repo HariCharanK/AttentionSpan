@@ -14,7 +14,7 @@ from urllib.parse import urlencode, urlparse
 from urllib.request import Request, urlopen
 import xml.etree.ElementTree as ET
 
-USER_AGENT = "PaperSwipe/0.1 (personal localhost research reader)"
+USER_AGENT = "AttentionSpan/0.1 (personal localhost research reader)"
 ATOM = "{http://www.w3.org/2005/Atom}"
 DC = "{http://purl.org/dc/elements/1.1/}"
 
@@ -65,7 +65,7 @@ TOPIC_RE = re.compile(
 
 
 def fetch(url: str, timeout: int = 25) -> bytes:
-    req = Request(url, headers={"User-Agent": "Mozilla/5.0 (compatible; PaperSwipe/0.1; personal reader)", "Accept": "application/atom+xml, application/rss+xml, application/json, text/html, */*"})
+    req = Request(url, headers={"User-Agent": "Mozilla/5.0 (compatible; AttentionSpan/0.1; personal reader)", "Accept": "application/atom+xml, application/rss+xml, application/json, text/html, */*"})
     with urlopen(req, timeout=timeout) as response:
         body = response.read(8_000_000)
         return gzip.decompress(body) if body[:2] == b"\x1f\x8b" else body

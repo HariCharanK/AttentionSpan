@@ -1,4 +1,4 @@
-# Paper Swipe
+# AttentionSpan
 
 A private, localhost research reader for papers, engineering blogs, long-form X posts, and Hacker News. Swipe right for more like this or left for less. These are preference signals, not bookmarks or reading plans. Votes persist in SQLite and tune a lightweight similarity ranker. Voted items stay out of Discover.
 
