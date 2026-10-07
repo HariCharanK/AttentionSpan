@@ -17,6 +17,8 @@ The database lives in `data/papers.sqlite3` and is tracked in Git. It contains t
 - arXiv: AI, ML, language models, distributed computing, databases, networks, security, software engineering, performance, algorithms, and quantitative biology categories
 - Hacker News: recent front-page stories and a one-time, topic-focused backfill from HN Search
 - RSS/Atom: AI labs and researchers above, plus Cloudflare, Netflix TechBlog, Tailscale, Dan Luu, Stripe, Antithesis, The Morning Paper, LessWrong, Astral Codex Ten, Experimental History, Gwern, STAT, Nature Medicine, and others
+- Ramp Builders: official RSS feed, with article length checked against the text bundled by its JavaScript site
+- Ramp Labs: research articles from its official research index
 - Official site sitemaps and article pages: Anthropic, Thinking Machines Lab, Prime Intellect, Goodfire, Reflection AI
 - Long-form X posts: selected researchers and labs, read through a public feed mirror and linked back to the original post
 

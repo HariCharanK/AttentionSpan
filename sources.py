@@ -10,7 +10,7 @@ import gzip
 import json
 import re
 import time
-from urllib.parse import urlencode, urlparse
+from urllib.parse import urlencode, urljoin, urlparse
 from urllib.request import Request, urlopen
 import xml.etree.ElementTree as ET
 
@@ -228,6 +228,89 @@ def parse_feed(name: str, url: str, limit: int = 100) -> list[dict]:
     return [item for item in result if item["content_chars"] >= MIN_ARTICLE_CHARS]
 
 
+def ramp_builders_articles() -> list[dict]:
+    """The Builders site renders MDX from its JS bundle, not article HTML."""
+    root = ET.fromstring(fetch("https://builders.ramp.com/feed.xml"))
+    homepage = fetch("https://builders.ramp.com/").decode("utf-8", "replace")
+    script = re.search(r'<script[^>]+src="([^"]+\.js)"', homepage)
+    if not script:
+        raise ValueError("Ramp Builders article bundle not found")
+    bundle = fetch(urljoin("https://builders.ramp.com/", script.group(1))).decode("utf-8", "replace")
+    result = []
+    for entry in root.findall("./channel/item")[:100]:
+        link = entry.findtext("link") or ""
+        slug = urlparse(link).path.rstrip("/").split("/")[-1]
+        if not link or not slug:
+            continue
+        mapping = re.search(r'"\.\./articles/' + re.escape(slug) +
+                            r'/[^\"]+\.mdx":([A-Za-z0-9_$]+)', bundle)
+        if not mapping:
+            continue
+        exported = re.search(r'const ' + re.escape(mapping.group(1)) +
+                             r'=Object\.freeze\(Object\.defineProperty\(\{__proto__:null,default:([A-Za-z0-9_$]+)', bundle)
+        if not exported:
+            continue
+        wrapper_start = bundle.find("function " + exported.group(1) + "(")
+        wrapper_end = bundle.find("function ", wrapper_start + 10)
+        wrapper = bundle[wrapper_start:wrapper_end] if wrapper_start >= 0 else ""
+        component = re.search(r'children:r\.jsx\(([A-Za-z0-9_$]+),\{\.\.\.e\}\)', wrapper)
+        if not component:
+            continue
+        start = bundle.find("function " + component.group(1) + "(")
+        end = bundle.find("function ", start + 10)
+        if start < 0:
+            continue
+        article_code = bundle[start:end if end >= 0 else len(bundle)]
+        literals = re.findall(r'children:"((?:\\.|[^"\\])*)"', article_code)
+        paragraphs = []
+        for literal in literals:
+            try:
+                paragraphs.append(clean(json.loads('"' + literal + '"')))
+            except ValueError:
+                paragraphs.append(clean(literal))
+        size = sum(map(len, paragraphs))
+        if size < MIN_ARTICLE_CHARS:
+            continue
+        description = clean(entry.findtext("description"))
+        preview = description if len(description) >= 100 else " ".join(p for p in paragraphs if len(p) >= 90)[:800]
+        result.append({"id": "url:" + link.rstrip("/"), "title": clean(entry.findtext("title")),
+                       "url": link, "source": "Ramp Builders", "kind": "blog",
+                       "summary": preview[:1800],
+                       "author": clean(entry.findtext(f"{DC}creator")) or "Ramp Builders",
+                       "published": iso_date(entry.findtext("pubDate")),
+                       "tags": "engineering, AI agents", "content_chars": size})
+    return result
+
+
+def ramp_labs_articles() -> list[dict]:
+    index = fetch("https://labs.ramp.com/research/").decode("utf-8", "replace")
+    paths = {path for path in re.findall(r'href="(/research/[^\"]+/)"', index)
+             if path != "/research/"}
+
+    def one(path):
+        try:
+            link = urljoin("https://labs.ramp.com", path)
+            page = PageMetadata()
+            page.feed(fetch(link, timeout=18).decode("utf-8", "replace"))
+            size = sum(map(len, page.paragraphs))
+            if size < MIN_ARTICLE_CHARS:
+                return None
+            title = clean(page.meta.get("og:title") or page.title).split(" · ")[0]
+            summary = clean(page.meta.get("og:description") or page.meta.get("description"))
+            if len(summary) < 90:
+                summary = " ".join(page.paragraphs[:3])
+            return {"id": "url:" + link.rstrip("/"), "title": title, "url": link,
+                    "source": "Ramp Labs", "kind": "blog", "summary": summary[:1800],
+                    "author": clean(page.meta.get("article:author")) or "Ramp Labs",
+                    "published": iso_date(page.meta.get("article:published_time")),
+                    "tags": "AI research, agents", "content_chars": size}
+        except Exception:
+            return None
+
+    with ThreadPoolExecutor(max_workers=5) as pool:
+        return [item for item in pool.map(one, sorted(paths)) if item]
+
+
 class PageMetadata(HTMLParser):
     def __init__(self):
         super().__init__()
@@ -410,6 +493,8 @@ def hn_stories(backfill: bool = False) -> list[dict]:
 def collect(backfill: bool = False) -> tuple[list[dict], dict[str, str]]:
     jobs = {name: (parse_feed, name, url) for name, url in FEEDS.items()}
     jobs.update({name: (sitemap_articles, name, *args) for name, args in SITEMAPS.items()})
+    jobs["Ramp Builders"] = (ramp_builders_articles,)
+    jobs["Ramp Labs"] = (ramp_labs_articles,)
     jobs.update({f"X · {name}": (x_long_posts, name, feed_id) for name, feed_id in X_FEEDS.items()})
     jobs["Hacker News"] = (hn_stories, backfill)
     items, status = [], {}
