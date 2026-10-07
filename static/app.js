@@ -13,6 +13,8 @@ function renderStats() {
   $('seen-count').textContent = (s.saved + s.passed).toLocaleString();
   $('remaining-count').textContent = s.unseen.toLocaleString();
   $('progress-fill').style.width = `${s.total ? (100 * (s.saved + s.passed) / s.total) : 0}%`;
+  $('skip-button').hidden = !s.skip_cooldown;
+  if (s.skip_cooldown) $('skip-button').title = `Skip for now; may return after ${s.skip_cooldown} other choices`;
   $('update-label').textContent = s.refreshing ? 'Gathering fresh ideas…' : s.last_refresh ? `Updated ${formatDate(s.last_refresh * 1000)}` : 'Waiting for first refresh…';
   $('refresh-button').disabled = !!s.refreshing;
   const sources = Object.entries(s.sources || {}).sort((a,b) => a[0].localeCompare(b[0]));
@@ -26,9 +28,10 @@ function renderStats() {
 function renderCard() {
   const card = $('swipe-card');
   const item = state.feed[0];
-  $('pass-button').disabled = $('save-button').disabled = !item || state.busy;
+  $('pass-button').disabled = $('skip-button').disabled = $('save-button').disabled = !item || state.busy;
   if (!item) {
-    card.innerHTML = `<div class="empty-card"><span class="empty-star">✳</span><h3>${state.stats?.refreshing ? 'Gathering your stack…' : 'You’re all caught up.'}</h3><p>${state.stats?.refreshing ? 'The first source refresh is underway. New papers and posts will appear shortly.' : 'Every item in this batch has had its turn. Refresh the sources to find more.'}</p><button id="empty-refresh">Refresh sources</button></div>`;
+    const cooling = state.stats?.cooling || 0;
+    card.innerHTML = `<div class="empty-card"><span class="empty-star">✳</span><h3>${state.stats?.refreshing ? 'Gathering your stack…' : cooling ? 'Your skips are cooling down.' : 'You’re all caught up.'}</h3><p>${state.stats?.refreshing ? 'The first source refresh is underway. New papers and posts will appear shortly.' : cooling ? `${cooling} skipped ${cooling === 1 ? 'item can' : 'items can'} return after more choices. Refresh sources for new ideas in the meantime.` : 'Every item in this batch has had its turn. Refresh the sources to find more.'}</p><button id="empty-refresh">Refresh sources</button></div>`;
     $('empty-refresh').onclick = refreshSources;
     return;
   }
@@ -45,22 +48,21 @@ async function loadSaved() {
   $('saved-grid').innerHTML = state.saved.length ? state.saved.map(item => `<article class="saved-item"><div class="saved-top"><span>${esc(item.source)}</span><span class="saved-date">${formatDate(item.published)}</span></div><h3>${esc(item.title)}</h3><p>${esc(item.summary)}</p><a href="${esc(item.url)}" target="_blank" rel="noopener noreferrer">Read original ↗</a></article>`).join('') : '<div class="empty-card" style="min-height:270px"><span class="empty-star">♡</span><h3>No positive swipes yet.</h3><p>Swipe right to ask for more like an idea. Reading it is up to you.</p></div>';
 }
 
-async function vote(direction) {
+async function decide(direction) {
   if (state.busy || !state.feed.length) return;
   state.busy = true;
   const item = state.feed[0];
   const card = $('swipe-card');
-  card.classList.add(direction === 1 ? 'exit-right' : 'exit-left');
+  card.classList.add(direction === 1 ? 'exit-right' : direction === -1 ? 'exit-left' : 'exit-down');
   try {
-    await fetchJson('/api/vote', {method:'POST', headers:{'Content-Type':'application/json'}, body:JSON.stringify({id:item.id, vote:direction})});
+    await fetchJson(direction === 0 ? '/api/skip' : '/api/vote', {method:'POST', headers:{'Content-Type':'application/json'}, body:JSON.stringify(direction === 0 ? {id:item.id} : {id:item.id, vote:direction})});
     await new Promise(resolve => setTimeout(resolve, 220));
-    state.feed.shift();
-    if (state.stats) { state.stats.unseen--; state.stats[direction === 1 ? 'saved' : 'passed']++; }
-    renderCard(); renderStats();
+    await loadStats();
+    await loadFeed();
   } catch (error) {
-    card.classList.remove('exit-left','exit-right');
-    alert(`Could not save your swipe: ${error.message}`);
-  } finally { state.busy = false; $('pass-button').disabled = $('save-button').disabled = !state.feed.length; }
+    card.classList.remove('exit-left','exit-right','exit-down');
+    alert(`Could not save your choice: ${error.message}`);
+  } finally { state.busy = false; $('pass-button').disabled = $('skip-button').disabled = $('save-button').disabled = !state.feed.length; }
 }
 
 function setupDrag() {
@@ -84,7 +86,7 @@ function setupDrag() {
     if (!start) return;
     start = null; card.classList.remove('dragging');
     card.style.transform = '';
-    if (Math.abs(dx) > 90) vote(dx > 0 ? 1 : -1);
+    if (Math.abs(dx) > 90) decide(dx > 0 ? 1 : -1);
     else card.querySelectorAll('.swipe-stamp').forEach(el => el.style.opacity = 0);
   };
   card.addEventListener('pointerup', end); card.addEventListener('pointercancel', end);
@@ -171,13 +173,13 @@ function drawNetwork() {
 
 async function boot() {
   $('today').textContent = new Date().toLocaleDateString(undefined,{weekday:'short',month:'short',day:'numeric'});
-  $('pass-button').onclick = () => vote(-1); $('save-button').onclick = () => vote(1);
+  $('pass-button').onclick = () => decide(-1); $('skip-button').onclick = () => decide(0); $('save-button').onclick = () => decide(1);
   $('refresh-button').onclick = refreshSources;
   document.querySelectorAll('[data-view]').forEach(el => el.onclick = () => setView(el.dataset.view));
-  document.addEventListener('keydown', e => {if(state.view !== 'discover' || e.target.matches('input,textarea'))return;if(e.key==='ArrowLeft')vote(-1);if(e.key==='ArrowRight')vote(1);});
+  document.addEventListener('keydown', e => {if(state.view !== 'discover' || e.target.matches('input,textarea'))return;if(e.key==='ArrowLeft')decide(-1);if(e.key==='ArrowDown' && state.stats?.skip_cooldown){e.preventDefault();decide(0);}if(e.key==='ArrowRight')decide(1);});
   setupDrag();
   window.addEventListener('resize',()=>{if(state.view==='network')drawNetwork();});
-  try {await Promise.all([loadStats(),loadFeed()]); if(state.stats.refreshing)pollRefresh();}
+  try {await loadStats(); await loadFeed(); if(state.stats.refreshing)pollRefresh();}
   catch(error){$('swipe-card').innerHTML=`<div class="empty-card"><h3>Could not load the feed.</h3><p>${esc(error.message)}</p></div>`;}
 }
 boot();

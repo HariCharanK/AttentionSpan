@@ -17,7 +17,7 @@
         <button class="nav-item" data-view="network"><span class="nav-icon">◎</span> Network</button>
       </nav>
       <div class="sidebar-spacer"></div>
-      <div class="side-card"><span class="side-card-icon">✦</span><strong>A feed that learns</strong><p>Right means more like this. Left means less. You decide what to read.</p></div>
+      <div class="side-card"><span class="side-card-icon">✦</span><strong>A feed that learns</strong><p>Right means more like this. Left means less. Skip means ask me later.</p></div>
       <button class="refresh-button" id="refresh-button"><span id="refresh-icon">↻</span> Refresh sources</button>
       <div class="side-footer"><span class="live-dot"></span><span id="update-label">Checking sources…</span></div>
     </aside>
@@ -27,9 +27,9 @@
 
       <section id="view-discover" class="view active">
         <div class="page-head"><div><div class="eyebrow">THE DAILY STACK <span class="eyebrow-line"></span></div><h1>Discover what<br><em>moves you forward.</em></h1><p>Research papers, sharp thinking, and ideas worth your time.</p></div><div class="metric-card"><span>IN YOUR ORBIT</span><strong id="corpus-count">—</strong><small>pieces to explore</small></div></div>
-        <div class="section-top"><div><h2>Up next <span class="sparkle">✳</span></h2><p id="feed-subtitle">Tuned to your interests. Refined by every swipe.</p></div><div class="keyboard-hint"><kbd>←</kbd> Less <kbd>→</kbd> More</div></div>
+        <div class="section-top"><div><h2>Up next <span class="sparkle">✳</span></h2><p id="feed-subtitle">Tuned to your interests. Refined by every swipe.</p></div><div class="keyboard-hint"><kbd>←</kbd> Less <kbd>↓</kbd> Skip <kbd>→</kbd> More</div></div>
         <div class="swipe-area"><div class="stack-shadow stack-shadow-two"></div><div class="stack-shadow stack-shadow-one"></div><article id="swipe-card" class="swipe-card" aria-live="polite"></article></div>
-        <div class="action-row"><button id="pass-button" class="action-button pass" aria-label="Less like this">✕</button><span>LESS ← &nbsp;·&nbsp; → MORE</span><button id="save-button" class="action-button save" aria-label="More like this">♡</button></div>
+        <div class="action-row"><button id="pass-button" class="action-button pass" aria-label="Less like this">✕</button><button id="skip-button" class="action-button skip" aria-label="Skip for now" title="Skip for now; it can return later">↷</button><button id="save-button" class="action-button save" aria-label="More like this">♡</button></div>
         <div class="progress-row"><div><strong id="seen-count">0</strong> swipes made <span class="dot-sep">·</span> <strong id="remaining-count">0</strong> still waiting</div><div class="progress-track"><div id="progress-fill"></div></div></div>
         <details class="source-health"><summary>Source status <span id="source-health-count"></span></summary><div id="source-health-list"></div></details>
       </section>

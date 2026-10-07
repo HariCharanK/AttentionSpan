@@ -27,3 +27,5 @@ Feed URLs and source limits are in `sources.py`. Failed sources do not prevent t
 The initial rank mixes a topic-keyword prior, publication recency, and a small source-diversity bonus. After votes, it adds TF-IDF cosine similarity to liked items and subtracts similarity to passed items. The displayed fit score is a heuristic, not a calibrated probability. The corpus and vote history are kept independently so this ranker can later be replaced with embeddings, a learned model, or reconsideration of old downvotes.
 
 The **Network** view connects items whose text has high cosine similarity. These are content links, not citation links. The **Liked** view is positive-vote history, not a bookmark list.
+
+**Skip** (the center button or ↓) leaves no positive or negative preference signal. A skipped item is held out for the next 20 card decisions, then becomes eligible for the ranked feed again. Skips and their cooldowns are stored in the same SQLite database; right and left votes still permanently hide an item from Discover.

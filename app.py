@@ -19,6 +19,7 @@ ROOT = Path(__file__).resolve().parent
 DB = ROOT / "data" / "papers.sqlite3"
 PORT = 8765
 REFRESH_SECONDS = 24 * 60 * 60
+SKIP_COOLDOWN = 20  # Other card decisions before a skipped item is eligible again.
 refresh_lock = threading.Lock()
 refresh_status = {"running": False, "last_result": {}}
 
@@ -54,6 +55,10 @@ def init_db() -> None:
             CREATE TABLE IF NOT EXISTS votes (
               item_id TEXT PRIMARY KEY REFERENCES items(id), vote INTEGER NOT NULL,
               voted_at TEXT NOT NULL
+            );
+            CREATE TABLE IF NOT EXISTS skips (
+              item_id TEXT PRIMARY KEY REFERENCES items(id), eligible_after INTEGER NOT NULL,
+              skipped_at TEXT NOT NULL
             );
             CREATE TABLE IF NOT EXISTS meta (key TEXT PRIMARY KEY, value TEXT NOT NULL);
             CREATE INDEX IF NOT EXISTS idx_items_published ON items(published DESC);
@@ -128,7 +133,8 @@ def cosine(a: dict, b: dict) -> float:
     return sum(weight * b.get(word, 0) for word, weight in a.items())
 
 
-def rank(items: list[dict], votes: dict[str, int], limit: int = 120) -> list[dict]:
+def rank(items: list[dict], votes: dict[str, int], limit: int = 120,
+         skips: dict[str, int] | None = None, decision_count: int = 0) -> list[dict]:
     vecs = vectors(items)
     liked = [vecs[item_id] for item_id, vote in votes.items() if vote == 1 and item_id in vecs]
     passed = [vecs[item_id] for item_id, vote in votes.items() if vote == -1 and item_id in vecs]
@@ -142,7 +148,7 @@ def rank(items: list[dict], votes: dict[str, int], limit: int = 120) -> list[dic
         return item["source"]
     scored = []
     for item in items:
-        if item["id"] in votes:
+        if item["id"] in votes or (skips or {}).get(item["id"], 0) > decision_count:
             continue
         text = (item["title"] + " " + item["summary"][:400]).lower()
         prior = min(1, sum(weight for phrase, weight in KEYWORDS.items() if phrase in text) / 6)
@@ -172,15 +178,17 @@ def rank(items: list[dict], votes: dict[str, int], limit: int = 120) -> list[dic
     return result
 
 
-def all_data() -> tuple[list[dict], dict[str, int]]:
+def all_data() -> tuple[list[dict], dict[str, int], dict[str, int], int]:
     with connect() as con:
         items = [dict(row) for row in con.execute("SELECT * FROM items ORDER BY published DESC")]
         votes = {row["item_id"]: row["vote"] for row in con.execute("SELECT item_id,vote FROM votes")}
-    return items, votes
+        skips = {row["item_id"]: row["eligible_after"] for row in con.execute("SELECT item_id,eligible_after FROM skips")}
+        decision_count = int(meta(con, "decision_count") or 0)
+    return items, votes, skips, decision_count
 
 
-def network(items: list[dict], votes: dict[str, int]) -> dict:
-    ordered = rank(items, votes, limit=48)
+def network(items: list[dict], votes: dict[str, int], skips: dict[str, int], decision_count: int) -> dict:
+    ordered = rank(items, votes, limit=48, skips=skips, decision_count=decision_count)
     saved = [item for item in items if votes.get(item["id"]) == 1]
     selected = (sorted(saved, key=lambda x: x["published"], reverse=True)[:30] + ordered[:48])
     seen = set()
@@ -212,19 +220,21 @@ class Handler(SimpleHTTPRequestHandler):
         path = urlparse(self.path).path
         if not path.startswith("/api/"):
             return super().do_GET()
-        items, votes = all_data()
+        items, votes, skips, decision_count = all_data()
         if path == "/api/feed":
-            return self.send_json({"items": rank(items, votes)})
+            return self.send_json({"items": rank(items, votes, skips=skips, decision_count=decision_count)})
         if path in ("/api/liked", "/api/saved"):
             return self.send_json({"items": sorted([{**x, "vote": 1} for x in items if votes.get(x["id"]) == 1], key=lambda x: x["published"], reverse=True)})
         if path == "/api/network":
-            return self.send_json(network(items, votes))
+            return self.send_json(network(items, votes, skips, decision_count))
         if path == "/api/stats":
             with connect() as con:
                 last = meta(con, "last_refresh")
                 sources = json.loads(meta(con, "source_status") or "{}")
             return self.send_json({"total": len(items), "unseen": len(items) - len(votes),
                                    "saved": sum(v == 1 for v in votes.values()), "passed": sum(v == -1 for v in votes.values()),
+                                   "cooling": sum(item_id not in votes and eligible > decision_count for item_id, eligible in skips.items()),
+                                   "skip_cooldown": SKIP_COOLDOWN,
                                    "refreshing": refresh_status["running"], "last_refresh": float(last) if last else None,
                                    "sources": sources, "last_result": refresh_status["last_result"]})
         return self.send_json({"error": "Not found"}, 404)
@@ -238,13 +248,25 @@ class Handler(SimpleHTTPRequestHandler):
             data = json.loads(self.rfile.read(size) or b"{}")
         except ValueError:
             return self.send_json({"error": "Invalid JSON"}, 400)
-        if path == "/api/vote":
-            if data.get("vote") not in (-1, 1) or not isinstance(data.get("id"), str):
-                return self.send_json({"error": "Expected item id and vote -1 or 1"}, 400)
+        if path in ("/api/vote", "/api/skip"):
+            if not isinstance(data.get("id"), str) or (path == "/api/vote" and data.get("vote") not in (-1, 1)):
+                return self.send_json({"error": "Expected item id and a valid action"}, 400)
             with connect() as con:
+                con.execute("BEGIN IMMEDIATE")
                 if not con.execute("SELECT 1 FROM items WHERE id=?", (data["id"],)).fetchone():
                     return self.send_json({"error": "Unknown item"}, 404)
-                con.execute("INSERT OR REPLACE INTO votes VALUES (?,?,?)", (data["id"], data["vote"], datetime.now(timezone.utc).isoformat()))
+                if con.execute("SELECT 1 FROM votes WHERE item_id=?", (data["id"],)).fetchone():
+                    return self.send_json({"error": "Item already voted on"}, 409)
+                current = int(meta(con, "decision_count") or 0)
+                if path == "/api/skip" and (row := con.execute("SELECT eligible_after FROM skips WHERE item_id=?", (data["id"],)).fetchone()) and row[0] > current:
+                    return self.send_json({"error": "Item is still cooling down"}, 409)
+                decision_count = current + 1
+                con.execute("INSERT OR REPLACE INTO meta VALUES ('decision_count', ?)", (str(decision_count),))
+                if path == "/api/skip":
+                    con.execute("INSERT OR REPLACE INTO skips VALUES (?,?,?)", (data["id"], decision_count + SKIP_COOLDOWN, datetime.now(timezone.utc).isoformat()))
+                else:
+                    con.execute("INSERT OR REPLACE INTO votes VALUES (?,?,?)", (data["id"], data["vote"], datetime.now(timezone.utc).isoformat()))
+                    con.execute("DELETE FROM skips WHERE item_id=?", (data["id"],))
             return self.send_json({"ok": True})
         if path == "/api/refresh":
             if refresh_status["running"]:
