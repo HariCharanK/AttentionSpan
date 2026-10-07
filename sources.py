@@ -100,6 +100,10 @@ X_FEEDS = {
     "Junyang Lin": "082097117b4543e9a741cd2580f936d3",
     "Richard Socher": "4d2d4165a7524217a08d3f57f27fa190",
     "Latent Space": "a7be8b61a1264ea7984abfaea3eff686",
+    "Guillermo Rauch": "e8750659b8154dbfa0489f451e044af1",
+    "Justine Moore": "c61046471f174d86bc0eb76cb44a21c3",
+    "Suhail": "c961547e08df4396b3ab69367a07a1cd",
+    "Anton Osika": "5f13b32b124a41cfb659f903a84032b1",
 }
 
 TOPIC_RE = re.compile(
