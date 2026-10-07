@@ -11,9 +11,9 @@ import re
 import sqlite3
 import threading
 import time
-from urllib.parse import parse_qs, urlparse
+from urllib.parse import parse_qs, parse_qsl, urlencode, urlparse
 
-from sources import collect
+from sources import MIN_ARTICLE_CHARS, MIN_X_CHARS, collect
 
 ROOT = Path(__file__).resolve().parent
 DB = ROOT / "data" / "papers.sqlite3"
@@ -30,6 +30,10 @@ KEYWORDS = {
     "llm": 1.7, "alignment": 1.8, "inference": 1.2, "eval": 1.1,
     "benchmark": 0.9, "machine learning": 1.0, "transformer": 1.0,
     "deep learning": 0.8, "multimodal": 0.8, "fine-tun": 1.5,
+    "human data": 2.2, "computer use": 2.3, "agent security": 2.0,
+    "distributed systems": 1.8, "database": 1.2, "consensus": 1.3,
+    "reliability": 1.0, "security": 1.2, "hacking": 1.2,
+    "philosophy": 0.7, "medicine": 0.6, "health": 0.5,
 }
 STOP = set("a an and are as at be been by can for from has have in into is it its of on or our that the their these this to using via was were with we you your new how what which why not more than about over under one two three some all also".split())
 WORD = re.compile(r"[a-z][a-z0-9-]{2,}")
@@ -50,7 +54,7 @@ def init_db() -> None:
               id TEXT PRIMARY KEY, title TEXT NOT NULL, url TEXT NOT NULL,
               source TEXT NOT NULL, kind TEXT NOT NULL, summary TEXT NOT NULL,
               author TEXT NOT NULL, published TEXT NOT NULL, tags TEXT NOT NULL,
-              added_at TEXT NOT NULL
+              added_at TEXT NOT NULL, content_chars INTEGER NOT NULL DEFAULT 0
             );
             CREATE TABLE IF NOT EXISTS votes (
               item_id TEXT PRIMARY KEY REFERENCES items(id), vote INTEGER NOT NULL,
@@ -63,6 +67,8 @@ def init_db() -> None:
             CREATE TABLE IF NOT EXISTS meta (key TEXT PRIMARY KEY, value TEXT NOT NULL);
             CREATE INDEX IF NOT EXISTS idx_items_published ON items(published DESC);
         """)
+        if "content_chars" not in {row[1] for row in con.execute("PRAGMA table_info(items)")}:
+            con.execute("ALTER TABLE items ADD COLUMN content_chars INTEGER NOT NULL DEFAULT 0")
 
 
 def meta(con: sqlite3.Connection, key: str) -> str | None:
@@ -76,10 +82,11 @@ def refresh(force: bool = False) -> bool:
     try:
         with connect() as con:
             last = meta(con, "last_refresh")
-        if not force and last and time.time() - float(last) < REFRESH_SECONDS:
+            backfill = meta(con, "long_form_backfill_v1") is None
+        if not force and not backfill and last and time.time() - float(last) < REFRESH_SECONDS:
             return False
         refresh_status["running"] = True
-        items, statuses = collect()
+        items, statuses = collect(backfill=backfill)
         if not items:
             refresh_status["last_result"] = {"fetched": 0, "sources": statuses}
             return False
@@ -87,14 +94,16 @@ def refresh(force: bool = False) -> bool:
         with connect() as con:
             for item in items:
                 con.execute("""INSERT INTO items
-                    (id,title,url,source,kind,summary,author,published,tags,added_at)
-                    VALUES (:id,:title,:url,:source,:kind,:summary,:author,:published,:tags,:added_at)
+                    (id,title,url,source,kind,summary,author,published,tags,added_at,content_chars)
+                    VALUES (:id,:title,:url,:source,:kind,:summary,:author,:published,:tags,:added_at,:content_chars)
                     ON CONFLICT(id) DO UPDATE SET
                     title=excluded.title, summary=excluded.summary,
                     author=excluded.author, tags=excluded.tags,
-                    published=excluded.published""", {**item, "added_at": now})
+                    published=excluded.published, content_chars=excluded.content_chars""", {**item, "added_at": now})
             con.execute("INSERT OR REPLACE INTO meta VALUES ('last_refresh', ?)", (str(time.time()),))
             con.execute("INSERT OR REPLACE INTO meta VALUES ('source_status', ?)", (json.dumps(statuses),))
+            if backfill and len(items) >= 1000:
+                con.execute("INSERT OR REPLACE INTO meta VALUES ('long_form_backfill_v1', ?)", (now,))
         refresh_status["last_result"] = {"fetched": len(items), "sources": statuses}
         return True
     except Exception as exc:
@@ -133,6 +142,15 @@ def cosine(a: dict, b: dict) -> float:
     return sum(weight * b.get(word, 0) for word, weight in a.items())
 
 
+def item_identity(item: dict) -> tuple[str, str]:
+    parsed = urlparse(item["url"])
+    query = urlencode([(key, value) for key, value in parse_qsl(parsed.query)
+                       if not key.lower().startswith("utm_") and key.lower() not in ("ref", "source")])
+    url = parsed.netloc.lower().removeprefix("www.") + parsed.path.rstrip("/") + ("?" + query if query else "")
+    title = re.sub(r"[^a-z0-9]+", " ", item["title"].lower()).strip()
+    return url, title if len(title) >= 35 else ""
+
+
 def rank(items: list[dict], votes: dict[str, int], limit: int = 120,
          skips: dict[str, int] | None = None, decision_count: int = 0) -> list[dict]:
     vecs = vectors(items)
@@ -140,6 +158,11 @@ def rank(items: list[dict], votes: dict[str, int], limit: int = 120,
     passed = [vecs[item_id] for item_id, vote in votes.items() if vote == -1 and item_id in vecs]
     now = datetime.now(timezone.utc)
     source_count = Counter()
+    voted_identities = {identity for item in items if item["id"] in votes
+                        for identity in item_identity(item) if identity}
+    cooling_identities = {identity for item in items
+                          if (skips or {}).get(item["id"], 0) > decision_count
+                          for identity in item_identity(item) if identity}
     def group(item):
         if item["kind"] == "x":
             return "X"
@@ -149,6 +172,9 @@ def rank(items: list[dict], votes: dict[str, int], limit: int = 120,
     scored = []
     for item in items:
         if item["id"] in votes or (skips or {}).get(item["id"], 0) > decision_count:
+            continue
+        if any(identity in voted_identities or identity in cooling_identities
+               for identity in item_identity(item) if identity):
             continue
         text = (item["title"] + " " + item["summary"][:400]).lower()
         prior = min(1, sum(weight for phrase, weight in KEYWORDS.items() if phrase in text) / 6)
@@ -164,9 +190,22 @@ def rank(items: list[dict], votes: dict[str, int], limit: int = 120,
         if item["kind"] == "x":
             score += 0.06  # A small starting signal from followed research accounts.
         if item["kind"] == "hn":
-            score -= 0.04
+            score += 0.02
+        if item["kind"] != "paper":
+            score += min(0.08, 0.025 * math.log1p(item["content_chars"] / 2000))
+        if re.search(r"\b(introducing|announcing|launch|live blog|release notes|changelog)\b", item["title"], re.I):
+            score -= 0.12
         scored.append((score, item, prior, positive))
     scored.sort(key=lambda x: x[0], reverse=True)
+    unique_scored = []
+    seen_identities = set()
+    for candidate in scored:
+        identities = {identity for identity in item_identity(candidate[1]) if identity}
+        if identities & seen_identities:
+            continue
+        seen_identities.update(identities)
+        unique_scored.append(candidate)
+    scored = unique_scored
     # Greedy source balance gives the feed breadth without hiding lower-ranked items.
     result = []
     for _ in range(min(limit, len(scored))):
@@ -180,7 +219,11 @@ def rank(items: list[dict], votes: dict[str, int], limit: int = 120,
 
 def all_data() -> tuple[list[dict], dict[str, int], dict[str, int], int]:
     with connect() as con:
-        items = [dict(row) for row in con.execute("SELECT * FROM items ORDER BY published DESC")]
+        items = [dict(row) for row in con.execute("""SELECT * FROM items WHERE
+            kind = 'paper' OR (kind = 'x' AND content_chars >= ?) OR
+            (kind IN ('blog','hn') AND content_chars >= ?) OR
+            id IN (SELECT item_id FROM votes) ORDER BY published DESC""",
+            (MIN_X_CHARS, MIN_ARTICLE_CHARS))]
         votes = {row["item_id"]: row["vote"] for row in con.execute("SELECT item_id,vote FROM votes")}
         skips = {row["item_id"]: row["eligible_after"] for row in con.execute("SELECT item_id,eligible_after FROM skips")}
         decision_count = int(meta(con, "decision_count") or 0)
