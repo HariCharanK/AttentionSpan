@@ -15,6 +15,7 @@ import threading
 import time
 from urllib.parse import parse_qs, parse_qsl, urlencode, urlparse
 
+from catalog import CATALOG_DB, seed_catalog
 from recommender import (load_representations, preference_network,
                          rank as semantic_rank)
 from semantic import (RECOMMENDER_VERSION, RERANK_MODEL, RERANK_PROMPT_VERSION,
@@ -24,6 +25,7 @@ from sources import MIN_ARTICLE_CHARS, MIN_X_CHARS, collect
 
 ROOT = Path(__file__).resolve().parent
 DB = Path(os.environ.get("ATTENTIONSPAN_DB", ROOT / "data" / "papers.sqlite3"))
+CATALOG = Path(os.environ.get("ATTENTIONSPAN_CATALOG", CATALOG_DB))
 PORT = int(os.environ.get("ATTENTIONSPAN_PORT", "8765"))
 REFRESH_SECONDS = 24 * 60 * 60
 SKIP_COOLDOWN = 20  # Other card decisions before a skipped item is eligible again.
@@ -126,6 +128,10 @@ def init_db() -> None:
                                 ('research_paper', 'blog', 'twitter_article')"""):
             con.execute("UPDATE items SET category=? WHERE id=?",
                         (content_category(row), row["id"]))
+        seeded = seed_catalog(con, CATALOG)
+        if seeded >= 1000:
+            con.execute("INSERT OR IGNORE INTO meta VALUES ('long_form_backfill_v1', ?)",
+                        (datetime.now(timezone.utc).isoformat(),))
         init_schema(con)
 
 

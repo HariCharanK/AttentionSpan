@@ -1,8 +1,19 @@
 # AttentionSpan
 
-A localhost research reader for papers, engineering blogs, long-form X posts, and Hacker News. Swipe right for more like this or left for less. These are preference signals, not bookmarks or reading plans. Votes persist in SQLite and tune a lightweight similarity ranker. Voted items stay out of Discover.
+A local, swipe-first semantic recommender for research papers, engineering blogs, long-form X posts, and Hacker News.
 
-## Run
+Swipe right to ask for more like an item and left to ask for less. A vote is a preference signal; it does not imply that you read, saved, or endorsed the item. Voted items leave the discovery feed, and every decision updates the next ranking.
+
+## What it does
+
+- Collects long-form work from arXiv, Hacker News, research labs, company engineering blogs, independent writers, and selected X accounts.
+- Refreshes the corpus daily and preserves where each item was first discovered.
+- Learns multiple interests from positive votes and applies item-specific penalties from negative votes.
+- Mixes strong matches, fresh work, and adjacent exploration in one feed.
+- Shows liked history and a semantic network of related ideas.
+- Runs as a small localhost web app backed by SQLite.
+
+## Run it
 
 ```bash
 python3 -m venv .venv
@@ -11,46 +22,66 @@ pip install -r requirements.txt
 python app.py
 ```
 
-Open <http://127.0.0.1:8765>. The first launch performs a historical backfill and can take several minutes. The app refreshes on startup when the last fetch is over 24 hours old, checks hourly while running, and has a **Refresh sources** button. The historical HN and arXiv fetch runs once; daily refreshes stay smaller.
+Open <http://127.0.0.1:8765>.
 
-The database lives in `data/papers.sqlite3`. It contains the corpus, votes, generated profiles, and embeddings. It stays local and is ignored by Git because semantic indexes can grow substantially. SQLite's temporary `-wal` and `-shm` files are ignored too.
+The checked-in catalog gives a new clone an immediate feed. AttentionSpan then refreshes source metadata in the background when the last fetch is more than 24 hours old. Use **Refresh sources** to request one manually.
 
-## Current sources
+## Public catalog and local state
 
-- arXiv: AI, ML, language models, distributed computing, databases, networks, security, software engineering, performance, algorithms, and quantitative biology categories
-- Hacker News: recent front-page stories and a one-time, topic-focused backfill from HN Search
-- RSS/Atom: AI labs and researchers above, plus Cloudflare, Netflix TechBlog, Tailscale, Dan Luu, Stripe, Antithesis, The Morning Paper, LessWrong, Astral Codex Ten, Experimental History, Gwern, STAT, Nature Medicine, and others
-- Ramp Builders: official RSS feed, with article length checked against the text bundled by its JavaScript site
-- Ramp Labs: research articles from its official research index
-- Official site sitemaps and article pages: Anthropic, Thinking Machines Lab, Prime Intellect, Goodfire, Reflection AI
-- Long-form X posts: selected researchers and labs, read through a public feed mirror and linked back to the original post
+AttentionSpan deliberately keeps two SQLite artifacts with different jobs:
 
-Blogs and linked HN stories must have at least 2,000 characters of extracted article text (roughly 300 words). X posts must have at least 800 characters. arXiv entries link to full papers; their abstracts are stored as previews. The database stores article excerpts and measured lengths, not full copies. Older short items remain in SQLite for vote history but no longer enter Discover.
+| File | Tracked | Contents |
+| --- | --- | --- |
+| `data/catalog.sqlite3` | Yes | Public item metadata and excerpts only |
+| `data/papers.sqlite3` | No | Runtime corpus, votes, skips, reading state, extracted text, profiles, embeddings, and ranking cache |
 
-Feed URLs and source limits are in `sources.py`. Failed sources do not prevent the others from refreshing.
+The app uses one local runtime database for simple and fast queries. On first launch, an empty runtime database is seeded from the public catalog. This keeps the useful source corpus forkable without publishing personal preferences or adding hundreds of megabytes of embeddings to Git.
 
-`items.category` records the content format: `research_paper`, `blog`, or `twitter_article`. `items.source` is the publisher shown in the app. The nullable `items.discovery_source` records where an item was first found, such as `x.com`, `Hacker News`, `slack #knowledge-sharing`, or `Manual Handpicked`. Existing records were backfilled from their ingestion adapters and known manual additions. Later refreshes preserve the first recorded discovery source. The legacy `kind` field remains an internal ingestion and ranking label, so Hacker News can be a discovery path while the linked item is categorized as a blog or paper.
+To refresh the public snapshot after updating the corpus:
+
+```bash
+python catalog.py export
+python catalog.py info
+```
+
+The export is atomic and contains only the `items` table. It excludes votes, skips, reads, model profiles, embeddings, API keys, refresh state, and caches.
 
 ## Ranking
 
-The legacy ranker remains available for rollback. It mixes a topic-keyword prior, recency, TF-IDF similarity to liked items, and distance from passed items.
+The semantic pipeline extracts article text, asks a profile model for a grounded structured description, and embeds a stable serialization of that profile with `text-embedding-3-large` at 3,072 float32 dimensions. Exact cosine search is sufficient for the current corpus size.
 
-The semantic ranker stores the exact extracted plain text supplied to the profile model and its SHA-256 hash. It then stores both the grounded structured profile JSON and the exact normalized profile text. `text-embedding-3-large` embeds that profile text at its full 3,072 dimensions as normalized float32. Interest matching uses only these profile embeddings. Exact matrix cosine search is sufficient for the current corpus size.
+Positive votes are reclustered from scratch into at most 18 interest groups. Negative votes produce candidate-specific penalties during ranking. The score combines 60% semantic relevance, 20% freshness, and 20% topic prior. The feed allocates 60% of its slots to best matches, 30% to fresh material, and 10% to adjacent exploration.
 
-Positive votes are reclustered from scratch into at most 18 interest groups. Negative votes remain ordinary vote rows; their candidate-specific penalty is calculated during ranking and is not persisted. The main score is 60% semantic relevance, 20% freshness, and 20% topic prior. Feed lanes allocate 60% to best matches, 30% to fresh material, and 10% to adjacent exploration. Depth, source repetition, and feed-local near-duplicate penalties are intentionally absent.
+Semantic versions build beside the active version and cannot be activated until they cover the complete corpus. The legacy TF-IDF ranker remains available when no semantic version is active.
 
-Semantic data and ranker configuration are versioned independently. A new semantic version builds beside every prior version. It cannot be activated until it covers the full corpus, so the current active ranker continues serving during a rebuild. Once activated, daily new items can enter through freshness and topic prior until their profiles are added. Stored profile text can be reused when a later version changes only its embedding recipe.
-
-Indexing never runs from app startup, source refresh, or an API request. It starts only through the explicit CLI command:
+Indexing is explicit and requires `OPENAI_API_KEY`:
 
 ```bash
 python semantic.py status
-python semantic.py index --limit 40 --workers 3
+python semantic.py index --limit 100 --workers 8
 python semantic.py activate
 ```
 
-Activation fails if coverage is incomplete. Optional LLM shortlist reranking is disabled by default. The displayed fit score is a heuristic, not a calibrated probability.
+The optional LLM shortlist reranker is disabled by default. The displayed fit score is a ranking heuristic rather than a calibrated probability.
 
-The **Network** view connects items using the active ranker's content representation: TF-IDF in legacy mode and generated profile embeddings in semantic mode. These are content links, not citation links. The **Liked** view is positive-vote history, not a bookmark list.
+## Sources
 
-**Skip** (the center button or ↓) leaves no positive or negative preference signal. A skipped item is held out for the next 20 card decisions, then becomes eligible for the ranked feed again. Skips and their cooldowns are stored in the same SQLite database; right and left votes still permanently hide an item from Discover.
+The corpus includes:
+
+- arXiv categories across AI, ML, language models, distributed systems, databases, networks, security, software engineering, algorithms, performance, and quantitative biology
+- Hacker News stories and a topic-focused historical backfill
+- AI lab and company writing from OpenAI, Anthropic, Google DeepMind, Microsoft Research, NVIDIA, Hugging Face, Mistral, BAIR, Ramp, Cloudflare, Netflix, Stripe, Tailscale, Antithesis, and emerging research labs
+- Independent technical and long-form writing from Simon Willison, Dan Luu, Lilian Weng, Gwern, LessWrong, Astral Codex Ten, Experimental History, and others
+- Long-form posts from selected researchers, builders, labs, and writers on X
+
+Blogs and HN links need at least 2,000 extracted characters to enter the feed. X posts need at least 800. Explicitly hand-picked items bypass this length gate. Feed definitions and collection limits live in `sources.py`; one failed source does not block the rest.
+
+`items.category` describes the format: `research_paper`, `blog`, or `twitter_article`. `items.source` is the publisher displayed in the app. `items.discovery_source` records the first discovery path, such as `x.com`, `Hacker News`, `slack #knowledge-sharing`, or `Manual Handpicked`.
+
+## Interaction semantics
+
+- **Right:** a positive preference signal
+- **Left:** a negative preference signal
+- **Skip:** no preference signal; hide the item for the next 20 decisions
+- **Liked:** positive-vote history, separate from read state
+- **Network:** similarity links between content, not citation links
