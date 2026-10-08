@@ -7,3 +7,5 @@
 .swipe-card.exit-down{transform:translateY(70%) scale(.88);opacity:0}
 .action-button.skip{color:var(--blue);font-size:27px}
 #skip-button[hidden]{display:none}
+.read-toolbar{display:flex;align-items:center;justify-content:space-between;margin:-10px 0 18px;gap:16px}.read-filters{display:flex;gap:6px}.read-filters button,.read-toggle{border:1px solid #3b4b5a;background:transparent;color:#9bacba;border-radius:7px;padding:7px 11px;font-size:10px;font-weight:700}.read-filters button:hover,.read-filters button.active,.read-toggle:hover{border-color:var(--lime);color:var(--lime);background:#253239}.read-toolbar>span{font-size:10px;color:var(--dim)}.saved-item.is-read{border-color:#2b3947;background:#19232f}.saved-item.is-read h3,.saved-item.is-read p{opacity:.72}.saved-actions{display:flex;align-items:flex-end;justify-content:space-between;gap:16px;margin-top:auto;padding-top:17px}.saved-item .saved-actions a{margin:0;padding:0}.read-toggle{white-space:nowrap}.saved-empty{min-height:270px;grid-column:1/-1}
+@media(max-width:650px){.read-toolbar{align-items:flex-start;flex-direction:column;margin-top:-14px}.saved-actions{align-items:center}.read-toggle{padding:7px 9px}}

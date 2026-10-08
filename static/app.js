@@ -1,4 +1,4 @@
-const state = {feed: [], saved: [], stats: null, busy: false, view: 'discover', graph: null, graphRaf: null};
+const state = {feed: [], saved: [], readFilter: 'all', stats: null, busy: false, view: 'discover', graph: null, graphRaf: null};
 const $ = id => document.getElementById(id);
 const esc = value => String(value ?? '').replace(/[&<>"']/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
 const formatDate = iso => { try { return new Date(iso).toLocaleDateString(undefined, {month:'short', day:'numeric', year:'numeric'}); } catch { return ''; } };
@@ -55,7 +55,35 @@ async function loadStats() { state.stats = await fetchJson('/api/stats'); render
 async function loadFeed() { state.feed = (await fetchJson('/api/feed')).items; renderCard(); renderStats(); }
 async function loadSaved() {
   state.saved = (await fetchJson('/api/liked')).items;
-  $('saved-grid').innerHTML = state.saved.length ? state.saved.map(item => `<article class="saved-item"><div class="saved-top"><span>${esc(item.source)}</span><span class="saved-date">${formatDate(item.published)}</span></div><h3>${esc(item.title)}</h3><p>${esc(item.summary)}</p><a href="${esc(item.url)}" target="_blank" rel="noopener noreferrer">Read original ↗</a></article>`).join('') : '<div class="empty-card" style="min-height:270px"><span class="empty-star">♡</span><h3>No positive swipes yet.</h3><p>Swipe right to ask for more like an idea. Reading it is up to you.</p></div>';
+  renderSaved();
+}
+
+function renderSaved() {
+  const visible = state.saved.filter(item => state.readFilter === 'all' || (state.readFilter === 'read') === item.read);
+  const readCount = state.saved.filter(item => item.read).length;
+  $('read-filter-count').textContent = `${visible.length} shown · ${readCount} read`;
+  document.querySelectorAll('[data-read-filter]').forEach(button => {
+    const active = button.dataset.readFilter === state.readFilter;
+    button.classList.toggle('active', active);
+    button.setAttribute('aria-pressed', String(active));
+  });
+  if (!state.saved.length) {
+    $('saved-grid').innerHTML = '<div class="empty-card" style="min-height:270px"><span class="empty-star">♡</span><h3>No positive swipes yet.</h3><p>Swipe right to ask for more like an idea. Reading it is up to you.</p></div>';
+    return;
+  }
+  if (!visible.length) {
+    $('saved-grid').innerHTML = '<div class="empty-card saved-empty"><span class="empty-star">✓</span><h3>Nothing here.</h3><p>Try another read filter.</p></div>';
+    return;
+  }
+  $('saved-grid').innerHTML = visible.map(item => `<article class="saved-item${item.read ? ' is-read' : ''}"><div class="saved-top"><span>${esc(item.source)}</span><span class="saved-date">${item.read ? 'READ · ' : ''}${formatDate(item.published)}</span></div><h3>${esc(item.title)}</h3><p>${esc(item.summary)}</p><div class="saved-actions"><a href="${esc(item.url)}" target="_blank" rel="noopener noreferrer">Read original ↗</a><button class="read-toggle" data-read-id="${esc(item.id)}" data-read-value="${item.read ? 'false' : 'true'}">${item.read ? 'Mark unread' : 'Mark as read'}</button></div></article>`).join('');
+}
+
+async function setReadState(id, read) {
+  const item = state.saved.find(saved => saved.id === id);
+  if (!item) return;
+  await fetchJson('/api/read', {method:'POST', headers:{'Content-Type':'application/json'}, body:JSON.stringify({id, read})});
+  item.read = read;
+  renderSaved();
 }
 
 async function decide(direction) {
@@ -198,6 +226,14 @@ async function boot() {
   $('pass-button').onclick = () => decide(-1); $('skip-button').onclick = () => decide(0); $('save-button').onclick = () => decide(1);
   $('refresh-button').onclick = refreshSources;
   document.querySelectorAll('[data-view]').forEach(el => el.onclick = () => setView(el.dataset.view));
+  document.querySelectorAll('[data-read-filter]').forEach(el => el.onclick = () => { state.readFilter = el.dataset.readFilter; renderSaved(); });
+  $('saved-grid').addEventListener('click', async event => {
+    const button = event.target.closest('[data-read-id]');
+    if (!button) return;
+    button.disabled = true;
+    try { await setReadState(button.dataset.readId, button.dataset.readValue === 'true'); }
+    catch (error) { button.disabled = false; alert(`Could not update read status: ${error.message}`); }
+  });
   document.addEventListener('keydown', e => {if(state.view !== 'discover' || e.target.matches('input,textarea'))return;if(e.key==='ArrowLeft')decide(-1);if(e.key==='ArrowDown' && state.stats?.skip_cooldown){e.preventDefault();decide(0);}if(e.key==='ArrowRight')decide(1);});
   setupDrag();
   window.addEventListener('resize',()=>{if(state.view==='network')drawNetwork();});

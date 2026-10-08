@@ -97,6 +97,9 @@ def init_db() -> None:
               item_id TEXT PRIMARY KEY REFERENCES items(id), eligible_after INTEGER NOT NULL,
               skipped_at TEXT NOT NULL
             );
+            CREATE TABLE IF NOT EXISTS reads (
+              item_id TEXT PRIMARY KEY REFERENCES items(id), read_at TEXT NOT NULL
+            );
             CREATE TABLE IF NOT EXISTS meta (key TEXT PRIMARY KEY, value TEXT NOT NULL);
             CREATE INDEX IF NOT EXISTS idx_items_published ON items(published DESC);
         """)
@@ -317,7 +320,11 @@ class Handler(SimpleHTTPRequestHandler):
         if path == "/api/feed":
             return self.send_json({"items": rank(items, votes, skips=skips, decision_count=decision_count)})
         if path in ("/api/liked", "/api/saved"):
-            return self.send_json({"items": sorted([{**x, "vote": 1} for x in items if votes.get(x["id"]) == 1], key=lambda x: x["published"], reverse=True)})
+            with connect() as con:
+                read_ids = {row["item_id"] for row in con.execute("SELECT item_id FROM reads")}
+            liked = [{**x, "vote": 1, "read": x["id"] in read_ids}
+                     for x in items if votes.get(x["id"]) == 1]
+            return self.send_json({"items": sorted(liked, key=lambda x: x["published"], reverse=True)})
         if path == "/api/network":
             return self.send_json(network(items, votes, skips, decision_count))
         if path == "/api/stats":
@@ -361,6 +368,18 @@ class Handler(SimpleHTTPRequestHandler):
                     con.execute("INSERT OR REPLACE INTO votes VALUES (?,?,?)", (data["id"], data["vote"], datetime.now(timezone.utc).isoformat()))
                     con.execute("DELETE FROM skips WHERE item_id=?", (data["id"],))
             return self.send_json({"ok": True})
+        if path == "/api/read":
+            if not isinstance(data.get("id"), str) or not isinstance(data.get("read"), bool):
+                return self.send_json({"error": "Expected item id and read state"}, 400)
+            with connect() as con:
+                if not con.execute("SELECT 1 FROM items WHERE id=?", (data["id"],)).fetchone():
+                    return self.send_json({"error": "Unknown item"}, 404)
+                if data["read"]:
+                    con.execute("INSERT OR REPLACE INTO reads VALUES (?,?)",
+                                (data["id"], datetime.now(timezone.utc).isoformat()))
+                else:
+                    con.execute("DELETE FROM reads WHERE item_id=?", (data["id"],))
+            return self.send_json({"ok": True, "read": data["read"]})
         if path == "/api/refresh":
             if refresh_status["running"]:
                 return self.send_json({"ok": True, "running": True})
