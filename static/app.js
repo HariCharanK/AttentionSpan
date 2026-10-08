@@ -106,7 +106,7 @@ async function decide(direction) {
   try {
     renderCard();
     await loadStats();
-    await loadFeed();
+    if (direction !== 0 || !state.feed.length) await loadFeed();
   } catch (error) {
     alert(`Choice saved, but the feed could not refresh: ${error.message}`);
   } finally {
