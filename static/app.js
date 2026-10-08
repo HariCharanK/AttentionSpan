@@ -19,7 +19,6 @@ function renderStats() {
   if (!s) return;
   $('unseen-pill').textContent = s.unseen.toLocaleString();
   $('saved-pill').textContent = s.saved.toLocaleString();
-  $('corpus-count').textContent = s.total.toLocaleString();
   $('seen-count').textContent = (s.saved + s.passed).toLocaleString();
   $('remaining-count').textContent = s.unseen.toLocaleString();
   $('progress-fill').style.width = `${s.total ? (100 * (s.saved + s.passed) / s.total) : 0}%`;

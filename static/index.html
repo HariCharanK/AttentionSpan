@@ -10,9 +10,17 @@
 <body>
   <div class="app-shell">
     <aside class="sidebar">
-      <div class="brand"><span class="brand-mark">✳</span><span>attention<span class="brand-light">span</span><small>YOUR RESEARCH RADAR</small></span></div>
+      <div class="brand" role="img" aria-label="AttentionSpan">
+        <svg class="brand-glyph" viewBox="0 0 64 64" aria-hidden="true">
+          <path class="logo-orbit orbit-one" d="M14 38C8 25 18 11 32 11c7 0 13 3 17 8"/>
+          <path class="logo-orbit orbit-two" d="M50 26c6 13-4 27-18 27-7 0-13-3-17-8"/>
+          <path class="logo-focus" d="M12 32c6-8 12.7-12 20-12s14 4 20 12c-6 8-12.7 12-20 12S18 40 12 32Z"/>
+          <rect class="logo-core" x="27" y="27" width="10" height="10" rx="2" transform="rotate(45 32 32)"/>
+          <circle class="logo-pulse" cx="32" cy="32" r="2.5"/>
+        </svg>
+      </div>
       <nav aria-label="Main navigation">
-        <button class="nav-item active" data-view="discover"><span class="nav-icon">◈</span> Discover <span id="unseen-pill" class="pill">0</span></button>
+        <button class="nav-item active" data-view="discover"><span class="nav-icon">◈</span> Feed <span id="unseen-pill" class="pill">0</span></button>
         <button class="nav-item" data-view="saved"><span class="nav-icon">▣</span> Liked <span id="saved-pill" class="pill">0</span></button>
         <button class="nav-item" data-view="network"><span class="nav-icon">◎</span> Network</button>
       </nav>
@@ -22,10 +30,9 @@
     </aside>
 
     <main>
-      <header class="topbar"><div class="mobile-brand">✳ <strong>attentionspan</strong></div><span class="topbar-note">A little less noise. A lot more signal.</span><div class="topbar-right"><span class="today" id="today"></span><span class="avatar">H</span></div></header>
+      <header class="topbar"><div class="mobile-brand" role="img" aria-label="AttentionSpan"><svg viewBox="0 0 64 64" aria-hidden="true"><path class="logo-orbit orbit-one" d="M14 38C8 25 18 11 32 11c7 0 13 3 17 8"/><path class="logo-orbit orbit-two" d="M50 26c6 13-4 27-18 27-7 0-13-3-17-8"/><path class="logo-focus" d="M12 32c6-8 12.7-12 20-12s14 4 20 12c-6 8-12.7 12-20 12S18 40 12 32Z"/><rect class="logo-core" x="27" y="27" width="10" height="10" rx="2" transform="rotate(45 32 32)"/><circle class="logo-pulse" cx="32" cy="32" r="2.5"/></svg></div><span class="topbar-note">A little less noise. A lot more signal.</span><div class="topbar-right"><span class="today" id="today"></span><span class="avatar">H</span></div></header>
 
       <section id="view-discover" class="view active">
-        <div class="page-head"><div><div class="eyebrow">THE DAILY STACK <span class="eyebrow-line"></span></div><h1>Discover what<br><em>moves you forward.</em></h1><p>Research papers, sharp thinking, and ideas worth your time.</p></div><div class="metric-card"><span>IN YOUR ORBIT</span><strong id="corpus-count">—</strong><small>pieces to explore</small></div></div>
         <div class="section-top"><div><h2>Up next <span class="sparkle">✳</span></h2><p id="feed-subtitle">Tuned to your interests. Refined by every swipe.</p></div><div class="keyboard-hint"><kbd>←</kbd> Less <kbd>↓</kbd> Skip <kbd>→</kbd> More</div></div>
         <div class="swipe-area"><div class="stack-shadow stack-shadow-two"></div><div class="stack-shadow stack-shadow-one"></div><article id="swipe-card" class="swipe-card" aria-live="polite"></article></div>
         <div class="action-row"><button id="pass-button" class="action-button pass" aria-label="Less like this">✕</button><button id="skip-button" class="action-button skip" aria-label="Skip for now" title="Skip for now; it can return later">↷</button><button id="save-button" class="action-button save" aria-label="More like this">♡</button></div>
@@ -38,7 +45,7 @@
       <section id="view-network" class="view"><div class="page-head compact"><div><div class="eyebrow">THE IDEA MAP <span class="eyebrow-line"></span></div><h1>Follow the <em>connections.</em></h1><p>Nearby dots share language and topics. Bright dots are your likes.</p></div></div><div class="network-panel"><div class="network-toolbar"><span><i class="legend-dot saved-dot"></i> Liked</span><span><i class="legend-dot fresh-dot"></i> To explore</span><span class="network-tip">Drag dots · Click to open</span></div><canvas id="network-canvas"></canvas><div id="network-tooltip" class="network-tooltip"></div></div></section>
     </main>
   </div>
-  <nav class="mobile-nav" aria-label="Mobile navigation"><button data-view="discover" class="active">◈ <span>Discover</span></button><button data-view="saved">▣ <span>Liked</span></button><button data-view="network">◎ <span>Network</span></button></nav>
+  <nav class="mobile-nav" aria-label="Mobile navigation"><button data-view="discover" class="active">◈ <span>Feed</span></button><button data-view="saved">▣ <span>Liked</span></button><button data-view="network">◎ <span>Network</span></button></nav>
   <script src="/app.js"></script>
 </body>
 </html>
