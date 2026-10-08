@@ -138,9 +138,12 @@ class SemanticStorageTests(unittest.TestCase):
                        "voice": "v", "cluster_label": "c"}
         text = semantic.profile_text(document, description)
         connection.execute(
-            "INSERT INTO semantic_items VALUES (?,?,?,?,?,?,?,?,?)",
+            """INSERT INTO semantic_items
+               (item_id,semantic_version,source_content_hash,source_text,source_text_hash,
+                profile_json,profile_text,embedding_hash,profile_embedding,extraction,generated_at)
+               VALUES (?,?,?,?,?,?,?,?,?,?,?)""",
             ("doc", semantic.SEMANTIC_VERSION, semantic.item_content_hash(document),
-             json.dumps(description), text, semantic.embedding_hash(text),
+             "source document", "source-hash", json.dumps(description), text, semantic.embedding_hash(text),
              np.zeros(semantic.EMBED_DIMENSIONS, dtype="<f4").tobytes(), "excerpt", semantic.now()),
         )
         connection.execute(
@@ -170,15 +173,46 @@ class SemanticStorageTests(unittest.TestCase):
              "float32", "inactive", semantic.now(), None),
         )
         connection.execute(
-            "INSERT INTO semantic_items VALUES (?,?,?,?,?,?,?,?,?)",
-            ("doc", "old", semantic.item_content_hash(document), '{"gist":"saved"}',
-             "saved profile text", "hash", unit(1, 0).astype("<f4").tobytes(),
+            """INSERT INTO semantic_items
+               (item_id,semantic_version,source_content_hash,source_text,source_text_hash,
+                profile_json,profile_text,embedding_hash,profile_embedding,extraction,generated_at)
+               VALUES (?,?,?,?,?,?,?,?,?,?,?)""",
+            ("doc", "old", semantic.item_content_hash(document), "saved source text", "source-hash",
+             '{"gist":"saved"}', "saved profile text", "hash", unit(1, 0).astype("<f4").tobytes(),
              "article", semantic.now()),
         )
         self.assertEqual(
             semantic.reusable_profile(connection, document, semantic.SEMANTIC_VERSION),
-            ('{"gist":"saved"}', "saved profile text", "article"),
+            ('{"gist":"saved"}', "saved profile text", "article",
+             "saved source text", "source-hash"),
         )
+
+    def test_index_row_keeps_exact_text_supplied_to_profile_model(self):
+        document = item("doc")
+        description = {"gist": "g", "themes": [], "technical_detail": "t",
+                       "voice": "v", "cluster_label": "c"}
+        extracted = "The complete extracted document supplied to the profile model."
+        with patch.object(semantic, "source_text", return_value=(extracted, "article")), \
+             patch.object(semantic, "generate_profile", return_value=description), \
+             patch.object(semantic, "normalized_embedding", return_value=b"vector"):
+            row = semantic.index_one(document, "test-key")
+        self.assertEqual(row[3], extracted)
+        self.assertEqual(row[4], semantic.sha256(extracted.encode()).hexdigest())
+        self.assertEqual(row[5], json.dumps(description, ensure_ascii=False, sort_keys=True))
+
+    def test_old_semantic_table_is_migrated_in_place(self):
+        connection = sqlite3.connect(":memory:")
+        base_database(connection)
+        connection.execute("""CREATE TABLE semantic_items (
+          item_id TEXT NOT NULL, semantic_version TEXT NOT NULL,
+          source_content_hash TEXT NOT NULL, profile_json TEXT NOT NULL,
+          profile_text TEXT NOT NULL, embedding_hash TEXT NOT NULL,
+          profile_embedding BLOB NOT NULL, extraction TEXT NOT NULL,
+          generated_at TEXT NOT NULL, PRIMARY KEY (item_id, semantic_version))""")
+        semantic.init_schema(connection)
+        columns = {row[1] for row in connection.execute("PRAGMA table_info(semantic_items)")}
+        self.assertIn("source_text", columns)
+        self.assertIn("source_text_hash", columns)
 
     def test_schema_initialization_never_calls_openai(self):
         connection = sqlite3.connect(":memory:")

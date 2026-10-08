@@ -268,7 +268,9 @@ def init_schema(con: sqlite3.Connection) -> None:
         CREATE TABLE IF NOT EXISTS semantic_items (
           item_id TEXT NOT NULL REFERENCES items(id),
           semantic_version TEXT NOT NULL REFERENCES semantic_versions(id),
-          source_content_hash TEXT NOT NULL, profile_json TEXT NOT NULL,
+          source_content_hash TEXT NOT NULL,
+          source_text TEXT NOT NULL, source_text_hash TEXT NOT NULL,
+          profile_json TEXT NOT NULL,
           profile_text TEXT NOT NULL, embedding_hash TEXT NOT NULL,
           profile_embedding BLOB NOT NULL, extraction TEXT NOT NULL,
           generated_at TEXT NOT NULL,
@@ -298,9 +300,16 @@ def init_schema(con: sqlite3.Connection) -> None:
           generated_at TEXT NOT NULL
         );
     """)
+    semantic_columns = {row[1] for row in con.execute("PRAGMA table_info(semantic_items)")}
+    if "source_text" not in semantic_columns:
+        con.execute("ALTER TABLE semantic_items ADD COLUMN source_text TEXT NOT NULL DEFAULT ''")
+    if "source_text_hash" not in semantic_columns:
+        con.execute("ALTER TABLE semantic_items ADD COLUMN source_text_hash TEXT NOT NULL DEFAULT ''")
     timestamp = now()
     con.execute("INSERT OR IGNORE INTO schema_migrations VALUES (?,?)",
                 ("semantic-schema-v1", timestamp))
+    con.execute("INSERT OR IGNORE INTO schema_migrations VALUES (?,?)",
+                ("semantic-store-source-text-v2", timestamp))
     con.execute("""INSERT OR IGNORE INTO semantic_versions
         VALUES (?,?,?,?,?,?,?,?,?,?,?)""",
         (SEMANTIC_VERSION, PROFILE_MODEL, PROFILE_PROMPT_VERSION, EXTRACTION_VERSION,
@@ -324,25 +333,27 @@ def pending_items(con: sqlite3.Connection, semantic_version: str = SEMANTIC_VERS
 
 
 def index_one(item: dict, key: str, semantic_version: str = SEMANTIC_VERSION,
-              reusable_profile: tuple[str, str, str] | None = None) -> tuple:
+              reusable_profile: tuple[str, str, str, str, str] | None = None) -> tuple:
     if reusable_profile:
-        profile_json, text, extraction = reusable_profile
+        profile_json, text, extraction, article, article_hash = reusable_profile
         description = json.loads(profile_json)
     else:
         article, extraction = source_text(item)
+        article_hash = sha256(article.encode()).hexdigest()
         description = generate_profile(item, article, key)
         text = profile_text(item, description)
         profile_json = json.dumps(description, ensure_ascii=False, sort_keys=True)
     vector = normalized_embedding(text, key)
-    return (item["id"], semantic_version, item_content_hash(item),
+    return (item["id"], semantic_version, item_content_hash(item), article, article_hash,
             profile_json, text,
             embedding_hash(text), vector, extraction, now())
 
 
 def reusable_profile(con: sqlite3.Connection, item: dict,
-                     semantic_version: str) -> tuple[str, str, str] | None:
+                     semantic_version: str) -> tuple[str, str, str, str, str] | None:
     """Reuse stored profile text when only the embedding recipe changes."""
-    row = con.execute("""SELECT s.profile_json,s.profile_text,s.extraction
+    row = con.execute("""SELECT s.profile_json,s.profile_text,s.extraction,
+                                s.source_text,s.source_text_hash
         FROM semantic_items s JOIN semantic_versions v ON v.id=s.semantic_version
         WHERE s.item_id=? AND s.semantic_version<>? AND s.source_content_hash=?
           AND v.profile_model=? AND v.profile_prompt_version=?
@@ -381,9 +392,15 @@ def index_pending(db_path: Path, semantic_version: str = SEMANTIC_VERSION,
             for future in as_completed(futures):
                 try:
                     row = future.result()
-                    con.execute("""INSERT INTO semantic_items VALUES (?,?,?,?,?,?,?,?,?)
+                    con.execute("""INSERT INTO semantic_items
+                        (item_id,semantic_version,source_content_hash,source_text,
+                         source_text_hash,profile_json,profile_text,embedding_hash,
+                         profile_embedding,extraction,generated_at)
+                        VALUES (?,?,?,?,?,?,?,?,?,?,?)
                         ON CONFLICT(item_id,semantic_version) DO UPDATE SET
                         source_content_hash=excluded.source_content_hash,
+                        source_text=excluded.source_text,
+                        source_text_hash=excluded.source_text_hash,
                         profile_json=excluded.profile_json, profile_text=excluded.profile_text,
                         embedding_hash=excluded.embedding_hash,
                         profile_embedding=excluded.profile_embedding,

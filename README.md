@@ -35,7 +35,7 @@ Feed URLs and source limits are in `sources.py`. Failed sources do not prevent t
 
 The legacy ranker remains available for rollback. It mixes a topic-keyword prior, recency, TF-IDF similarity to liked items, and distance from passed items.
 
-The semantic ranker uses a grounded profile generated for each document and stores both its structured JSON and the exact normalized profile text. `text-embedding-3-large` embeds that profile text at its full 3,072 dimensions as normalized float32. Interest matching uses only these profile embeddings. Exact matrix cosine search is sufficient for the current corpus size.
+The semantic ranker stores the exact extracted plain text supplied to the profile model and its SHA-256 hash. It then stores both the grounded structured profile JSON and the exact normalized profile text. `text-embedding-3-large` embeds that profile text at its full 3,072 dimensions as normalized float32. Interest matching uses only these profile embeddings. Exact matrix cosine search is sufficient for the current corpus size.
 
 Positive votes are reclustered from scratch into at most 18 interest groups. Negative votes remain ordinary vote rows; their candidate-specific penalty is calculated during ranking and is not persisted. The main score is 60% semantic relevance, 20% freshness, and 20% topic prior. Feed lanes allocate 60% to best matches, 30% to fresh material, and 10% to adjacent exploration. Depth, source repetition, and feed-local near-duplicate penalties are intentionally absent.
 
