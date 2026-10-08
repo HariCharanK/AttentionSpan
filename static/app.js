@@ -2,7 +2,17 @@ const state = {feed: [], saved: [], stats: null, busy: false, view: 'discover', 
 const $ = id => document.getElementById(id);
 const esc = value => String(value ?? '').replace(/[&<>"']/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
 const formatDate = iso => { try { return new Date(iso).toLocaleDateString(undefined, {month:'short', day:'numeric', year:'numeric'}); } catch { return ''; } };
-const fetchJson = async (path, options) => { const response = await fetch(path, options); const data = await response.json(); if (!response.ok) throw new Error(data.error || response.statusText); return data; };
+const fetchJson = async (path, options) => {
+  const response = await fetch(path, options);
+  const contentType = response.headers.get('content-type') || '';
+  if (!contentType.includes('application/json')) {
+    const login = response.redirected || response.url.includes('cloudflareaccess.com');
+    throw new Error(login ? 'Cloudflare sign-in expired. Reload the page and sign in again.' : `Unexpected response from ${path} (${response.status}). Reload the page and try again.`);
+  }
+  const data = await response.json();
+  if (!response.ok) throw new Error(data.error || response.statusText);
+  return data;
+};
 
 function renderStats() {
   const s = state.stats;
@@ -28,6 +38,7 @@ function renderStats() {
 function renderCard() {
   const card = $('swipe-card');
   const item = state.feed[0];
+  card.className = 'swipe-card';
   $('pass-button').disabled = $('skip-button').disabled = $('save-button').disabled = !item || state.busy;
   if (!item) {
     const cooling = state.stats?.cooling || 0;
@@ -35,7 +46,6 @@ function renderCard() {
     $('empty-refresh').onclick = refreshSources;
     return;
   }
-  card.className = 'swipe-card';
   const type = item.kind === 'paper' ? 'RESEARCH PAPER' : item.kind === 'hn' ? 'HACKER NEWS' : item.kind === 'x' ? 'LONG-FORM X POST' : 'IDEAS & WRITING';
   const summary = item.summary || 'Open the original to read more.';
   card.innerHTML = `<div class="card-top"><div class="card-type"><i></i>${type}</div><div class="card-match"><strong>${item.match}/100</strong> fit · ${esc(item.why)}</div></div><h3 class="card-title">${esc(item.title)}</h3><p class="card-summary">${esc(summary)}</p><div class="card-bottom"><div class="card-meta"><span class="source-tag">${esc(item.source)}</span><span class="meta-text">${esc(item.author || '')}</span><span class="meta-sep">·</span><span class="meta-text">${formatDate(item.published)}</span></div><a class="open-link" href="${esc(item.url)}" target="_blank" rel="noopener noreferrer">Read original ↗</a></div><div class="swipe-stamp pass">LESS</div><div class="swipe-stamp save">MORE</div>`;
@@ -56,13 +66,25 @@ async function decide(direction) {
   card.classList.add(direction === 1 ? 'exit-right' : direction === -1 ? 'exit-left' : 'exit-down');
   try {
     await fetchJson(direction === 0 ? '/api/skip' : '/api/vote', {method:'POST', headers:{'Content-Type':'application/json'}, body:JSON.stringify(direction === 0 ? {id:item.id} : {id:item.id, vote:direction})});
-    await new Promise(resolve => setTimeout(resolve, 220));
-    await loadStats();
-    await loadFeed();
   } catch (error) {
     card.classList.remove('exit-left','exit-right','exit-down');
     alert(`Could not save your choice: ${error.message}`);
-  } finally { state.busy = false; $('pass-button').disabled = $('skip-button').disabled = $('save-button').disabled = !state.feed.length; }
+    state.busy = false;
+    renderCard();
+    return;
+  }
+  await new Promise(resolve => setTimeout(resolve, 220));
+  state.feed.shift();
+  try {
+    renderCard();
+    await loadStats();
+    await loadFeed();
+  } catch (error) {
+    alert(`Choice saved, but the feed could not refresh: ${error.message}`);
+  } finally {
+    state.busy = false;
+    renderCard();
+  }
 }
 
 function setupDrag() {
