@@ -30,8 +30,6 @@ function renderStats() {
   const working = sources.filter(([,result]) => !result.startsWith('error')).length;
   $('source-health-count').textContent = `${working}/${sources.length} working`;
   $('source-health-list').innerHTML = sources.map(([name,result]) => `<div class="source-health-row"><span>${esc(name)}</span><span class="${result.startsWith('error') ? 'source-error' : ''}">${esc(result)}</span></div>`).join('');
-  const count = state.feed.length;
-  $('feed-subtitle').textContent = count ? `A mix of ${new Set(state.feed.map(x => x.source)).size} sources, tuned by your swipes.` : 'Fresh items are being gathered for you.';
 }
 
 function renderCard() {
