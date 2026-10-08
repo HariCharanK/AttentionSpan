@@ -1,4 +1,4 @@
-const state = {feed: [], saved: [], readFilter: 'all', stats: null, busy: false, view: 'discover', graph: null, graphRaf: null};
+const state = {feed: [], saved: [], readFilter: 'all', stats: null, busy: false, decisionRevision: 0, view: 'discover', graph: null, graphRaf: null};
 const $ = id => document.getElementById(id);
 const esc = value => String(value ?? '').replace(/[&<>"']/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
 const formatDate = iso => { try { return new Date(iso).toLocaleDateString(undefined, {month:'short', day:'numeric', year:'numeric'}); } catch { return ''; } };
@@ -52,6 +52,24 @@ function renderCard() {
 
 async function loadStats() { state.stats = await fetchJson('/api/stats'); renderStats(); }
 async function loadFeed() { state.feed = (await fetchJson('/api/feed')).items; renderCard(); renderStats(); }
+async function refreshAfterDecision(revision, rerank) {
+  try {
+    const feedRequest = rerank || !state.feed.length ? fetchJson('/api/feed') : Promise.resolve(null);
+    const [stats, refreshed] = await Promise.all([fetchJson('/api/stats'), feedRequest]);
+    if (revision !== state.decisionRevision) return;
+    state.stats = stats;
+    if (refreshed) {
+      const visible = state.feed[0];
+      state.feed = visible
+        ? [visible, ...refreshed.items.filter(item => item.id !== visible.id)]
+        : refreshed.items;
+    }
+    renderStats();
+    renderCard();
+  } catch (error) {
+    console.warn('Choice saved, but the background feed refresh failed:', error);
+  }
+}
 async function loadSaved() {
   state.saved = (await fetchJson('/api/liked')).items;
   renderSaved();
@@ -87,6 +105,7 @@ async function setReadState(id, read) {
 
 async function decide(direction) {
   if (state.busy || !state.feed.length) return;
+  const revision = ++state.decisionRevision;
   state.busy = true;
   const item = state.feed[0];
   const card = $('swipe-card');
@@ -102,16 +121,9 @@ async function decide(direction) {
   }
   await new Promise(resolve => setTimeout(resolve, 220));
   state.feed.shift();
-  try {
-    renderCard();
-    await loadStats();
-    if (direction !== 0 || !state.feed.length) await loadFeed();
-  } catch (error) {
-    alert(`Choice saved, but the feed could not refresh: ${error.message}`);
-  } finally {
-    state.busy = false;
-    renderCard();
-  }
+  state.busy = false;
+  renderCard();
+  void refreshAfterDecision(revision, direction !== 0);
 }
 
 function setupDrag() {
