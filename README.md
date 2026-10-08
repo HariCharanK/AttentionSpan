@@ -32,10 +32,10 @@ AttentionSpan deliberately keeps two SQLite artifacts with different jobs:
 
 | File | Tracked | Contents |
 | --- | --- | --- |
-| `data/catalog.sqlite3` | Yes | Public item metadata and excerpts only |
+| `data/catalog.sqlite3.gz` | Yes | Compressed public item metadata only |
 | `data/papers.sqlite3` | No | Runtime corpus, votes, skips, reading state, extracted text, profiles, embeddings, and ranking cache |
 
-The app uses one local runtime database for simple and fast queries. On first launch, an empty runtime database is seeded from the public catalog. This keeps the useful source corpus forkable without publishing personal preferences or adding hundreds of megabytes of embeddings to Git.
+The app uses one local runtime database for simple and fast queries. On first launch, it decompresses the catalog in memory and seeds an empty runtime database. The tracked snapshot contains IDs, titles, URLs, publishers, authors, dates, categories, discovery paths, and measured content lengths. Summaries and extracted article text stay local. This keeps the useful source list forkable without publishing personal preferences or adding hundreds of megabytes of text and embeddings to Git.
 
 To refresh the public snapshot after updating the corpus:
 
@@ -44,7 +44,7 @@ python catalog.py export
 python catalog.py info
 ```
 
-The export is atomic and contains only the `items` table. It excludes votes, skips, reads, model profiles, embeddings, API keys, refresh state, and caches.
+The export is atomic and contains only the metadata columns of the `items` table. It excludes summaries, extracted text, votes, skips, reads, model profiles, embeddings, API keys, refresh state, and caches.
 
 ## Ranking
 
