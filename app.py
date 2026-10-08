@@ -23,6 +23,15 @@ SKIP_COOLDOWN = 20  # Other card decisions before a skipped item is eligible aga
 refresh_lock = threading.Lock()
 refresh_status = {"running": False, "last_result": {}}
 
+# These were added directly by the user, even when their publishers also have feeds.
+MANUAL_ITEM_IDS = {
+    "arxiv:2507.19457", "arxiv:2601.18779",
+    "url:https://builders.ramp.com/post/why-we-built-our-background-agent",
+    "url:https://labs.ramp.com/research/latent-briefing-kv-cache",
+    "url:https://accelerateordie.com/p/we-melted-iphones-for-science",
+    "url:https://www.anthropic.com/engineering/a-postmortem-of-three-recent-issues",
+}
+
 KEYWORDS = {
     "reinforcement learning": 2.7, "post-training": 3.0, "post training": 3.0,
     "rlhf": 3.2, "agentic": 2.8, "agents": 2.1, "agent": 1.4,
@@ -47,6 +56,19 @@ def connect() -> sqlite3.Connection:
     return con
 
 
+def discovery_source(item: dict) -> str | None:
+    """Where the app first found an item; the existing source is its publisher."""
+    if item["id"] in MANUAL_ITEM_IDS:
+        return "Manual Handpicked"
+    if item["kind"] == "x":
+        return "x.com"
+    if item["kind"] == "paper":
+        return "arXiv"
+    if item["kind"] == "hn":
+        return "Hacker News"
+    return (urlparse(item["url"]).hostname or "").lower().removeprefix("www.") or None
+
+
 def init_db() -> None:
     with connect() as con:
         con.executescript("""
@@ -54,7 +76,8 @@ def init_db() -> None:
               id TEXT PRIMARY KEY, title TEXT NOT NULL, url TEXT NOT NULL,
               source TEXT NOT NULL, kind TEXT NOT NULL, summary TEXT NOT NULL,
               author TEXT NOT NULL, published TEXT NOT NULL, tags TEXT NOT NULL,
-              added_at TEXT NOT NULL, content_chars INTEGER NOT NULL DEFAULT 0
+              added_at TEXT NOT NULL, content_chars INTEGER NOT NULL DEFAULT 0,
+              discovery_source TEXT
             );
             CREATE TABLE IF NOT EXISTS votes (
               item_id TEXT PRIMARY KEY REFERENCES items(id), vote INTEGER NOT NULL,
@@ -69,6 +92,11 @@ def init_db() -> None:
         """)
         if "content_chars" not in {row[1] for row in con.execute("PRAGMA table_info(items)")}:
             con.execute("ALTER TABLE items ADD COLUMN content_chars INTEGER NOT NULL DEFAULT 0")
+        if "discovery_source" not in {row[1] for row in con.execute("PRAGMA table_info(items)")}:
+            con.execute("ALTER TABLE items ADD COLUMN discovery_source TEXT")
+            for row in con.execute("SELECT id, url, kind FROM items"):
+                con.execute("UPDATE items SET discovery_source=? WHERE id=?",
+                            (discovery_source(row), row["id"]))
 
 
 def meta(con: sqlite3.Connection, key: str) -> str | None:
@@ -93,13 +121,15 @@ def refresh(force: bool = False) -> bool:
         now = datetime.now(timezone.utc).isoformat()
         with connect() as con:
             for item in items:
+                item = {**item, "discovery_source": discovery_source(item)}
                 con.execute("""INSERT INTO items
-                    (id,title,url,source,kind,summary,author,published,tags,added_at,content_chars)
-                    VALUES (:id,:title,:url,:source,:kind,:summary,:author,:published,:tags,:added_at,:content_chars)
+                    (id,title,url,source,kind,summary,author,published,tags,added_at,content_chars,discovery_source)
+                    VALUES (:id,:title,:url,:source,:kind,:summary,:author,:published,:tags,:added_at,:content_chars,:discovery_source)
                     ON CONFLICT(id) DO UPDATE SET
                     title=excluded.title, summary=excluded.summary,
                     author=excluded.author, tags=excluded.tags,
-                    published=excluded.published, content_chars=excluded.content_chars""", {**item, "added_at": now})
+                    published=excluded.published, content_chars=excluded.content_chars,
+                    discovery_source=COALESCE(items.discovery_source, excluded.discovery_source)""", {**item, "added_at": now})
             con.execute("INSERT OR REPLACE INTO meta VALUES ('last_refresh', ?)", (str(time.time()),))
             con.execute("INSERT OR REPLACE INTO meta VALUES ('source_status', ?)", (json.dumps(statuses),))
             if backfill and len(items) >= 1000:

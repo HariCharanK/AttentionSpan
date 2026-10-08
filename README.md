@@ -26,6 +26,8 @@ Blogs and linked HN stories must have at least 2,000 characters of extracted art
 
 Feed URLs and source limits are in `sources.py`. Failed sources do not prevent the others from refreshing.
 
+`items.source` is the publisher shown in the app. The nullable `items.discovery_source` records where an item was first found, such as `x.com`, `Hacker News`, `slack #knowledge-sharing`, or `Manual Handpicked`. Existing records were backfilled from their ingestion adapters and known manual additions. Later refreshes preserve the first recorded discovery source.
+
 ## Ranking
 
 The initial rank mixes a topic-keyword prior, publication recency, and a small source-diversity bonus. After votes, it adds TF-IDF cosine similarity to liked items and subtracts similarity to passed items. The displayed fit score is a heuristic, not a calibrated probability. The corpus and vote history are kept independently so this ranker can later be replaced with embeddings, a learned model, or reconsideration of old downvotes.
