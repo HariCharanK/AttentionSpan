@@ -1,4 +1,4 @@
-const state = {feed: [], saved: [], readFilter: 'all', stats: null, busy: false, decisionRevision: 0, view: 'discover', graph: null, graphRaf: null};
+const state = {feed: [], saved: [], readFilter: 'all', stats: null, busy: false, decisionRevision: 0, feedRefreshInFlight: null, pendingFeed: null, votedIds: new Set(), skippedUntil: new Map(), view: 'discover', graph: null, graphRaf: null};
 const $ = id => document.getElementById(id);
 const esc = value => String(value ?? '').replace(/[&<>"']/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
 const formatDate = iso => { try { return new Date(iso).toLocaleDateString(undefined, {month:'short', day:'numeric', year:'numeric'}); } catch { return ''; } };
@@ -52,22 +52,37 @@ function renderCard() {
 
 async function loadStats() { state.stats = await fetchJson('/api/stats'); renderStats(); }
 async function loadFeed() { state.feed = (await fetchJson('/api/feed')).items; renderCard(); renderStats(); }
-async function refreshAfterDecision(revision, rerank) {
+
+function applyRefreshedFeed(refreshed) {
+  const visible = state.feed[0];
+  const tail = refreshed.items.filter(item =>
+    item.id !== visible?.id && !state.votedIds.has(item.id) &&
+    (state.skippedUntil.get(item.id) || 0) <= state.decisionRevision);
+  state.feed = visible ? [visible, ...tail] : tail;
+  renderStats();
+  renderCard();
+}
+
+function requestFeedRefresh() {
+  if (state.feedRefreshInFlight) return;
+  state.feedRefreshInFlight = fetchJson('/api/feed')
+    .then(refreshed => {
+      if (state.busy) state.pendingFeed = refreshed;
+      else applyRefreshedFeed(refreshed);
+    })
+    .catch(error => console.warn('Background feed refresh failed:', error))
+    .finally(() => { state.feedRefreshInFlight = null; });
+}
+
+async function refreshAfterDecision(revision, requestFeed) {
+  if (requestFeed) requestFeedRefresh();
   try {
-    const feedRequest = rerank || !state.feed.length ? fetchJson('/api/feed') : Promise.resolve(null);
-    const [stats, refreshed] = await Promise.all([fetchJson('/api/stats'), feedRequest]);
+    const stats = await fetchJson('/api/stats');
     if (revision !== state.decisionRevision) return;
     state.stats = stats;
-    if (refreshed) {
-      const visible = state.feed[0];
-      state.feed = visible
-        ? [visible, ...refreshed.items.filter(item => item.id !== visible.id)]
-        : refreshed.items;
-    }
     renderStats();
-    renderCard();
   } catch (error) {
-    console.warn('Choice saved, but the background feed refresh failed:', error);
+    console.warn('Choice saved, but the background stats refresh failed:', error);
   }
 }
 async function loadSaved() {
@@ -106,6 +121,7 @@ async function setReadState(id, read) {
 async function decide(direction) {
   if (state.busy || !state.feed.length) return;
   const revision = ++state.decisionRevision;
+  const feedRequestAlreadyRunning = Boolean(state.feedRefreshInFlight);
   state.busy = true;
   const item = state.feed[0];
   const card = $('swipe-card');
@@ -120,10 +136,18 @@ async function decide(direction) {
     return;
   }
   await new Promise(resolve => setTimeout(resolve, 220));
+  if (direction === 0) state.skippedUntil.set(item.id, revision + (state.stats?.skip_cooldown || 20));
+  else state.votedIds.add(item.id);
   state.feed.shift();
   state.busy = false;
   renderCard();
-  void refreshAfterDecision(revision, direction !== 0);
+  if (state.pendingFeed) {
+    const pending = state.pendingFeed;
+    state.pendingFeed = null;
+    applyRefreshedFeed(pending);
+  }
+  const needsFeed = direction !== 0 || !state.feed.length;
+  void refreshAfterDecision(revision, needsFeed && !feedRequestAlreadyRunning);
 }
 
 function setupDrag() {
