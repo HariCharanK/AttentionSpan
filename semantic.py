@@ -21,6 +21,7 @@ import xml.etree.ElementTree as ET
 import numpy as np
 
 from sources import X_FEEDS, clean, fetch
+from storage import CATALOG_DB, ITEMS_SELECT, connect_databases, init_storage
 
 SEMANTIC_VERSION = "semantic-v1"
 RECOMMENDER_VERSION = "ranker-v1"
@@ -266,7 +267,7 @@ def init_schema(con: sqlite3.Connection) -> None:
           status TEXT NOT NULL, created_at TEXT NOT NULL, activated_at TEXT
         );
         CREATE TABLE IF NOT EXISTS semantic_items (
-          item_id TEXT NOT NULL REFERENCES items(id),
+          item_id TEXT NOT NULL,
           semantic_version TEXT NOT NULL REFERENCES semantic_versions(id),
           source_content_hash TEXT NOT NULL,
           source_text TEXT NOT NULL, source_text_hash TEXT NOT NULL,
@@ -321,10 +322,16 @@ def init_schema(con: sqlite3.Connection) -> None:
          json.dumps(RANKER_CONFIG, sort_keys=True), "ready", timestamp, None))
 
 
+def item_rows_sql(con: sqlite3.Connection) -> str:
+    """Use the attached catalog in production and the legacy table in isolated tests."""
+    databases = {row[1] for row in con.execute("PRAGMA database_list")}
+    return ITEMS_SELECT if "catalog" in databases else "SELECT * FROM items"
+
+
 def pending_items(con: sqlite3.Connection, semantic_version: str = SEMANTIC_VERSION,
                   limit: int | None = None) -> list[dict]:
-    rows = [dict(row) for row in con.execute("""SELECT items.*, s.source_content_hash AS indexed_hash
-        FROM items LEFT JOIN semantic_items s
+    rows = [dict(row) for row in con.execute(f"""SELECT items.*, s.source_content_hash AS indexed_hash
+        FROM ({item_rows_sql(con)}) items LEFT JOIN semantic_items s
           ON s.item_id=items.id AND s.semantic_version=?
         ORDER BY CASE WHEN items.id IN (SELECT item_id FROM votes) THEN 0 ELSE 1 END,
                  items.published DESC""", (semantic_version,))]
@@ -365,13 +372,14 @@ def reusable_profile(con: sqlite3.Connection, item: dict,
 
 
 def index_pending(db_path: Path, semantic_version: str = SEMANTIC_VERSION,
-                  limit: int = 40, workers: int = 3) -> dict:
+                  limit: int = 40, workers: int = 3,
+                  catalog_path: Path = CATALOG_DB) -> dict:
     key = api_key()
     if not key:
         return {"indexed": 0, "failed": 0, "error": "OpenAI API key unavailable"}
-    con = sqlite3.connect(db_path, timeout=30)
-    con.row_factory = sqlite3.Row
+    con = connect_databases(db_path, catalog_path)
     try:
+        init_storage(con)
         init_schema(con)
         all_pending = pending_items(con, semantic_version)
         todo = all_pending[:limit]
@@ -426,7 +434,7 @@ def index_pending(db_path: Path, semantic_version: str = SEMANTIC_VERSION,
 
 
 def coverage(con: sqlite3.Connection, semantic_version: str = SEMANTIC_VERSION) -> dict:
-    items = [dict(row) for row in con.execute("SELECT * FROM items")]
+    items = [dict(row) for row in con.execute(item_rows_sql(con))]
     stored = dict(con.execute("""SELECT item_id,source_content_hash FROM semantic_items
                                   WHERE semantic_version=?""", (semantic_version,)))
     current = sum(stored.get(item["id"]) == item_content_hash(item) for item in items)
@@ -486,16 +494,18 @@ def main() -> None:
     parser = argparse.ArgumentParser(description="Manage AttentionSpan semantic indexing")
     parser.add_argument("command", choices=("status", "index", "activate"))
     parser.add_argument("--db", type=Path, default=Path(__file__).parent / "data" / "papers.sqlite3")
+    parser.add_argument("--catalog", type=Path, default=CATALOG_DB)
     parser.add_argument("--version", default=SEMANTIC_VERSION)
     parser.add_argument("--limit", type=int, default=40)
     parser.add_argument("--workers", type=int, default=3)
     args = parser.parse_args()
     if args.command == "index":
-        print(json.dumps(index_pending(args.db, args.version, args.limit, args.workers), indent=2))
+        print(json.dumps(index_pending(args.db, args.version, args.limit, args.workers,
+                                       args.catalog), indent=2))
         return
-    con = sqlite3.connect(args.db, timeout=30)
-    con.row_factory = sqlite3.Row
+    con = connect_databases(args.db, args.catalog)
     try:
+        init_storage(con)
         init_schema(con)
         con.commit()
         if args.command == "activate":

@@ -1,7 +1,7 @@
 data/*.sqlite3-wal
 data/*.sqlite3-shm
 data/*.sqlite3
-!data/catalog.sqlite3.gz
+!data/catalog.sqlite3
 .venv/
 __pycache__/
 *.pyc

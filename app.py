@@ -15,17 +15,17 @@ import threading
 import time
 from urllib.parse import parse_qs, parse_qsl, urlencode, urlparse
 
-from catalog import CATALOG_DB, seed_catalog
 from recommender import (load_representations, preference_network,
                          rank as semantic_rank)
 from semantic import (RECOMMENDER_VERSION, RERANK_MODEL, RERANK_PROMPT_VERSION,
                       api_key, coverage as semantic_coverage, init_schema,
                       rerank as llm_rerank)
 from sources import MIN_ARTICLE_CHARS, MIN_X_CHARS, collect
+from storage import CATALOG_DB, ITEMS_SELECT, STATE_DB, connect_databases, init_storage
 
 ROOT = Path(__file__).resolve().parent
-DB = Path(os.environ.get("ATTENTIONSPAN_DB", ROOT / "data" / "papers.sqlite3"))
-CATALOG = Path(os.environ.get("ATTENTIONSPAN_CATALOG", CATALOG_DB))
+DB = STATE_DB
+CATALOG = CATALOG_DB
 PORT = int(os.environ.get("ATTENTIONSPAN_PORT", "8765"))
 REFRESH_SECONDS = 24 * 60 * 60
 SKIP_COOLDOWN = 20  # Other card decisions before a skipped item is eligible again.
@@ -60,11 +60,7 @@ WORD = re.compile(r"[a-z][a-z0-9-]{2,}")
 
 
 def connect() -> sqlite3.Connection:
-    DB.parent.mkdir(exist_ok=True)
-    con = sqlite3.connect(DB, timeout=30)
-    con.row_factory = sqlite3.Row
-    con.execute("PRAGMA journal_mode=WAL")
-    return con
+    return connect_databases(DB, CATALOG)
 
 
 def discovery_source(item: dict) -> str | None:
@@ -92,46 +88,7 @@ def content_category(item: dict) -> str:
 
 def init_db() -> None:
     with connect() as con:
-        con.executescript("""
-            CREATE TABLE IF NOT EXISTS items (
-              id TEXT PRIMARY KEY, title TEXT NOT NULL, url TEXT NOT NULL,
-              source TEXT NOT NULL, kind TEXT NOT NULL, summary TEXT NOT NULL,
-              author TEXT NOT NULL, published TEXT NOT NULL, tags TEXT NOT NULL,
-              added_at TEXT NOT NULL, content_chars INTEGER NOT NULL DEFAULT 0,
-              discovery_source TEXT, category TEXT NOT NULL
-            );
-            CREATE TABLE IF NOT EXISTS votes (
-              item_id TEXT PRIMARY KEY REFERENCES items(id), vote INTEGER NOT NULL,
-              voted_at TEXT NOT NULL
-            );
-            CREATE TABLE IF NOT EXISTS skips (
-              item_id TEXT PRIMARY KEY REFERENCES items(id), eligible_after INTEGER NOT NULL,
-              skipped_at TEXT NOT NULL
-            );
-            CREATE TABLE IF NOT EXISTS reads (
-              item_id TEXT PRIMARY KEY REFERENCES items(id), read_at TEXT NOT NULL
-            );
-            CREATE TABLE IF NOT EXISTS meta (key TEXT PRIMARY KEY, value TEXT NOT NULL);
-            CREATE INDEX IF NOT EXISTS idx_items_published ON items(published DESC);
-        """)
-        if "content_chars" not in {row[1] for row in con.execute("PRAGMA table_info(items)")}:
-            con.execute("ALTER TABLE items ADD COLUMN content_chars INTEGER NOT NULL DEFAULT 0")
-        if "discovery_source" not in {row[1] for row in con.execute("PRAGMA table_info(items)")}:
-            con.execute("ALTER TABLE items ADD COLUMN discovery_source TEXT")
-            for row in con.execute("SELECT id, url, kind FROM items"):
-                con.execute("UPDATE items SET discovery_source=? WHERE id=?",
-                            (discovery_source(row), row["id"]))
-        if "category" not in {row[1] for row in con.execute("PRAGMA table_info(items)")}:
-            con.execute("ALTER TABLE items ADD COLUMN category TEXT")
-        for row in con.execute("""SELECT id, url, kind FROM items
-                                WHERE category IS NULL OR category NOT IN
-                                ('research_paper', 'blog', 'twitter_article')"""):
-            con.execute("UPDATE items SET category=? WHERE id=?",
-                        (content_category(row), row["id"]))
-        seeded = seed_catalog(con, CATALOG)
-        if seeded >= 1000:
-            con.execute("INSERT OR IGNORE INTO meta VALUES ('long_form_backfill_v1', ?)",
-                        (datetime.now(timezone.utc).isoformat(),))
+        init_storage(con)
         init_schema(con)
 
 
@@ -159,15 +116,18 @@ def refresh(force: bool = False) -> bool:
             for item in items:
                 item = {**item, "discovery_source": discovery_source(item),
                         "category": content_category(item)}
-                con.execute("""INSERT INTO items
-                    (id,title,url,source,kind,summary,author,published,tags,added_at,content_chars,discovery_source,category)
-                    VALUES (:id,:title,:url,:source,:kind,:summary,:author,:published,:tags,:added_at,:content_chars,:discovery_source,:category)
+                con.execute("""INSERT INTO catalog.items
+                    (id,title,url,source,kind,author,published,content_chars,discovery_source,category)
+                    VALUES (:id,:title,:url,:source,:kind,:author,:published,:content_chars,:discovery_source,:category)
                     ON CONFLICT(id) DO UPDATE SET
-                    title=excluded.title, summary=excluded.summary,
-                    author=excluded.author, tags=excluded.tags,
+                    title=excluded.title, author=excluded.author,
                     published=excluded.published, content_chars=excluded.content_chars,
                     discovery_source=COALESCE(items.discovery_source, excluded.discovery_source),
                     category=excluded.category""", {**item, "added_at": now})
+                con.execute("""INSERT INTO item_content (item_id,summary,tags,added_at)
+                    VALUES (:id,:summary,:tags,:added_at)
+                    ON CONFLICT(item_id) DO UPDATE SET summary=excluded.summary,
+                    tags=excluded.tags,added_at=excluded.added_at""", {**item, "added_at": now})
             con.execute("INSERT OR REPLACE INTO meta VALUES ('last_refresh', ?)", (str(time.time()),))
             con.execute("INSERT OR REPLACE INTO meta VALUES ('source_status', ?)", (json.dumps(statuses),))
             if backfill and len(items) >= 1000:
@@ -287,10 +247,10 @@ def legacy_rank(items: list[dict], votes: dict[str, int], limit: int = 120,
 
 def all_data() -> tuple[list[dict], dict[str, int], dict[str, int], int]:
     with connect() as con:
-        items = [dict(row) for row in con.execute("""SELECT * FROM items WHERE
-            kind = 'paper' OR (kind = 'x' AND content_chars >= ?) OR
-            (kind IN ('blog','hn') AND content_chars >= ?) OR
-            id IN (SELECT item_id FROM votes) ORDER BY published DESC""",
+        items = [dict(row) for row in con.execute(ITEMS_SELECT + """ WHERE
+            i.kind = 'paper' OR (i.kind = 'x' AND i.content_chars >= ?) OR
+            (i.kind IN ('blog','hn') AND i.content_chars >= ?) OR
+            i.id IN (SELECT item_id FROM votes) ORDER BY i.published DESC""",
             (MIN_X_CHARS, MIN_ARTICLE_CHARS))]
         votes = {row["item_id"]: row["vote"] for row in con.execute("SELECT item_id,vote FROM votes")}
         skips = {row["item_id"]: row["eligible_after"] for row in con.execute("SELECT item_id,eligible_after FROM skips")}
@@ -459,7 +419,7 @@ class Handler(SimpleHTTPRequestHandler):
                 return self.send_json({"error": "Expected item id and a valid action"}, 400)
             with connect() as con:
                 con.execute("BEGIN IMMEDIATE")
-                if not con.execute("SELECT 1 FROM items WHERE id=?", (data["id"],)).fetchone():
+                if not con.execute("SELECT 1 FROM catalog.items WHERE id=?", (data["id"],)).fetchone():
                     return self.send_json({"error": "Unknown item"}, 404)
                 if con.execute("SELECT 1 FROM votes WHERE item_id=?", (data["id"],)).fetchone():
                     return self.send_json({"error": "Item already voted on"}, 409)
@@ -478,7 +438,7 @@ class Handler(SimpleHTTPRequestHandler):
             if not isinstance(data.get("id"), str) or not isinstance(data.get("read"), bool):
                 return self.send_json({"error": "Expected item id and read state"}, 400)
             with connect() as con:
-                if not con.execute("SELECT 1 FROM items WHERE id=?", (data["id"],)).fetchone():
+                if not con.execute("SELECT 1 FROM catalog.items WHERE id=?", (data["id"],)).fetchone():
                     return self.send_json({"error": "Unknown item"}, 404)
                 if data["read"]:
                     con.execute("INSERT OR REPLACE INTO reads VALUES (?,?)",
