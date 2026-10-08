@@ -3,9 +3,11 @@ from __future__ import annotations
 
 from collections import Counter
 from datetime import datetime, timezone
+from hashlib import sha256
 from http.server import SimpleHTTPRequestHandler, ThreadingHTTPServer
 import json
 import math
+import os
 from pathlib import Path
 import re
 import sqlite3
@@ -13,15 +15,22 @@ import threading
 import time
 from urllib.parse import parse_qs, parse_qsl, urlencode, urlparse
 
+from recommender import (load_representations, preference_network,
+                         rank as semantic_rank)
+from semantic import (RECOMMENDER_VERSION, RERANK_MODEL, RERANK_PROMPT_VERSION,
+                      api_key, coverage as semantic_coverage, init_schema,
+                      rerank as llm_rerank)
 from sources import MIN_ARTICLE_CHARS, MIN_X_CHARS, collect
 
 ROOT = Path(__file__).resolve().parent
-DB = ROOT / "data" / "papers.sqlite3"
-PORT = 8765
+DB = Path(os.environ.get("ATTENTIONSPAN_DB", ROOT / "data" / "papers.sqlite3"))
+PORT = int(os.environ.get("ATTENTIONSPAN_PORT", "8765"))
 REFRESH_SECONDS = 24 * 60 * 60
 SKIP_COOLDOWN = 20  # Other card decisions before a skipped item is eligible again.
 refresh_lock = threading.Lock()
 refresh_status = {"running": False, "last_result": {}}
+rerank_lock = threading.Lock()
+representation_cache = {"key": None, "vectors": {}, "profiles": {}}
 
 # These were added directly by the user, even when their publishers also have feeds.
 MANUAL_ITEM_IDS = {
@@ -117,6 +126,7 @@ def init_db() -> None:
                                 ('research_paper', 'blog', 'twitter_article')"""):
             con.execute("UPDATE items SET category=? WHERE id=?",
                         (content_category(row), row["id"]))
+        init_schema(con)
 
 
 def meta(con: sqlite3.Connection, key: str) -> str | None:
@@ -203,8 +213,8 @@ def item_identity(item: dict) -> tuple[str, str]:
     return url, title if len(title) >= 35 else ""
 
 
-def rank(items: list[dict], votes: dict[str, int], limit: int = 120,
-         skips: dict[str, int] | None = None, decision_count: int = 0) -> list[dict]:
+def legacy_rank(items: list[dict], votes: dict[str, int], limit: int = 120,
+                skips: dict[str, int] | None = None, decision_count: int = 0) -> list[dict]:
     vecs = vectors(items)
     liked = [vecs[item_id] for item_id, vote in votes.items() if vote == 1 and item_id in vecs]
     passed = [vecs[item_id] for item_id, vote in votes.items() if vote == -1 and item_id in vecs]
@@ -282,8 +292,8 @@ def all_data() -> tuple[list[dict], dict[str, int], dict[str, int], int]:
     return items, votes, skips, decision_count
 
 
-def network(items: list[dict], votes: dict[str, int], skips: dict[str, int], decision_count: int) -> dict:
-    ordered = rank(items, votes, limit=48, skips=skips, decision_count=decision_count)
+def legacy_network(items: list[dict], votes: dict[str, int], skips: dict[str, int], decision_count: int) -> dict:
+    ordered = legacy_rank(items, votes, limit=48, skips=skips, decision_count=decision_count)
     saved = [item for item in items if votes.get(item["id"]) == 1]
     selected = (sorted(saved, key=lambda x: x["published"], reverse=True)[:30] + ordered[:48])
     seen = set()
@@ -297,6 +307,77 @@ def network(items: list[dict], votes: dict[str, int], skips: dict[str, int], dec
                         "kind": x["kind"], "category": x["category"], "url": x["url"],
                         "saved": votes.get(x["id"]) == 1} for x in selected],
             "edges": edges}
+
+
+def active_representations() -> tuple[str | None, dict, dict]:
+    """Load only an explicitly activated version; never activates or indexes one."""
+    with connect() as con:
+        version = meta(con, "active_semantic_version")
+        if not version:
+            return None, {}, {}
+        signature = con.execute("""SELECT COUNT(*),MAX(generated_at)
+                                   FROM semantic_items WHERE semantic_version=?""",
+                                (version,)).fetchone()
+        key = (version, signature[0], signature[1])
+        if representation_cache["key"] != key:
+            vectors, profiles = load_representations(con, version)
+            representation_cache.update(key=key, vectors=vectors, profiles=profiles)
+    return version, representation_cache["vectors"], representation_cache["profiles"]
+
+
+def rerank_key(votes: dict[str, int], candidates: list[dict], semantic_version: str,
+               recommender_version: str) -> tuple[str, str]:
+    vote_hash = sha256(json.dumps(sorted(votes.items())).encode()).hexdigest()
+    payload = {"votes": vote_hash, "candidates": [item["id"] for item in candidates],
+               "semantic_version": semantic_version, "recommender_version": recommender_version,
+               "model": RERANK_MODEL, "prompt": RERANK_PROMPT_VERSION}
+    return sha256(json.dumps(payload, sort_keys=True).encode()).hexdigest(), vote_hash
+
+
+def apply_cached_rerank(ordered: list[dict], votes: dict[str, int], items: list[dict],
+                        profiles: dict, semantic_version: str) -> list[dict]:
+    """Optionally reorder within lanes; disabled unless explicitly enabled in meta."""
+    with connect() as con:
+        enabled = meta(con, "llm_rerank_enabled") == "1"
+        recommender_version = meta(con, "active_recommender_version") or RECOMMENDER_VERSION
+    if not enabled or not votes:
+        return ordered
+    candidates = [item for item in ordered[:36] if item["id"] in profiles]
+    voted = [{**item, "vote": votes[item["id"]], "profile": profiles[item["id"]]}
+             for item in items if item["id"] in votes and item["id"] in profiles]
+    if len(candidates) < 12 or not voted:
+        return ordered
+    key, vote_hash = rerank_key(votes, candidates, semantic_version, recommender_version)
+    with connect() as con:
+        row = con.execute("SELECT ranked_ids FROM rerank_cache WHERE cache_key=?", (key,)).fetchone()
+    if row:
+        positions = {item_id: index for index, item_id in enumerate(json.loads(row[0]))}
+        top = ordered[:36]
+        lanes = {lane: [item for item in top if item["lane"] == lane]
+                 for lane in ("match", "fresh", "explore")}
+        for entries in lanes.values():
+            entries.sort(key=lambda item: positions.get(item["id"], 1000 + top.index(item)))
+        return [lanes[item["lane"]].pop(0) for item in top] + ordered[36:]
+    if not api_key() or not rerank_lock.acquire(blocking=False):
+        return ordered
+
+    def work():
+        try:
+            ranked_ids = llm_rerank(
+                voted, [{**item, "profile": profiles[item["id"]]} for item in candidates], api_key())
+            with connect() as con:
+                con.execute("""INSERT OR REPLACE INTO rerank_cache
+                    VALUES (?,?,?,?,?,?,?,?,?)""",
+                    (key, recommender_version, semantic_version, vote_hash,
+                     json.dumps([item["id"] for item in candidates]), json.dumps(ranked_ids),
+                     RERANK_MODEL, RERANK_PROMPT_VERSION, datetime.now(timezone.utc).isoformat()))
+        except Exception:
+            pass
+        finally:
+            rerank_lock.release()
+
+    threading.Thread(target=work, daemon=True).start()
+    return ordered
 
 
 class Handler(SimpleHTTPRequestHandler):
@@ -318,7 +399,16 @@ class Handler(SimpleHTTPRequestHandler):
             return super().do_GET()
         items, votes, skips, decision_count = all_data()
         if path == "/api/feed":
-            return self.send_json({"items": rank(items, votes, skips=skips, decision_count=decision_count)})
+            version, semantic_vectors, profiles = active_representations()
+            if version:
+                ordered = semantic_rank(items, votes, semantic_vectors, profiles,
+                                        skips=skips, decision_count=decision_count)
+                ordered = apply_cached_rerank(ordered, votes, items, profiles, version)
+                return self.send_json({"items": ordered, "recommender": "semantic",
+                                       "semantic_version": version})
+            return self.send_json({"items": legacy_rank(items, votes, skips=skips,
+                                                        decision_count=decision_count),
+                                   "recommender": "legacy"})
         if path in ("/api/liked", "/api/saved"):
             with connect() as con:
                 read_ids = {row["item_id"] for row in con.execute("SELECT item_id FROM reads")}
@@ -326,15 +416,25 @@ class Handler(SimpleHTTPRequestHandler):
                      for x in items if votes.get(x["id"]) == 1]
             return self.send_json({"items": sorted(liked, key=lambda x: x["published"], reverse=True)})
         if path == "/api/network":
-            return self.send_json(network(items, votes, skips, decision_count))
+            version, semantic_vectors, profiles = active_representations()
+            if version:
+                ordered = semantic_rank(items, votes, semantic_vectors, profiles, limit=45,
+                                        skips=skips, decision_count=decision_count)
+                return self.send_json(preference_network(items, votes, semantic_vectors,
+                                                         profiles, ordered))
+            return self.send_json(legacy_network(items, votes, skips, decision_count))
         if path == "/api/stats":
             with connect() as con:
                 last = meta(con, "last_refresh")
                 sources = json.loads(meta(con, "source_status") or "{}")
+                active_semantic = meta(con, "active_semantic_version")
+                semantic_state = semantic_coverage(con)
             return self.send_json({"total": len(items), "unseen": len(items) - len(votes),
                                    "saved": sum(v == 1 for v in votes.values()), "passed": sum(v == -1 for v in votes.values()),
                                    "cooling": sum(item_id not in votes and eligible > decision_count for item_id, eligible in skips.items()),
                                    "skip_cooldown": SKIP_COOLDOWN,
+                                   "semantic": {**semantic_state, "active": active_semantic,
+                                                "indexing_enabled": False},
                                    "refreshing": refresh_status["running"], "last_refresh": float(last) if last else None,
                                    "sources": sources, "last_result": refresh_status["last_result"]})
         return self.send_json({"error": "Not found"}, 404)

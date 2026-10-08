@@ -5,12 +5,15 @@ A localhost research reader for papers, engineering blogs, long-form X posts, an
 ## Run
 
 ```bash
-python3 app.py
+python3 -m venv .venv
+source .venv/bin/activate
+pip install -r requirements.txt
+python app.py
 ```
 
-Open <http://127.0.0.1:8765>. Python 3.10+ is the only requirement. The first launch performs a historical backfill and can take several minutes. The app refreshes on startup when the last fetch is over 24 hours old, checks hourly while running, and has a **Refresh sources** button. The historical HN and arXiv fetch runs once; daily refreshes stay smaller.
+Open <http://127.0.0.1:8765>. The first launch performs a historical backfill and can take several minutes. The app refreshes on startup when the last fetch is over 24 hours old, checks hourly while running, and has a **Refresh sources** button. The historical HN and arXiv fetch runs once; daily refreshes stay smaller.
 
-The database lives in `data/papers.sqlite3` and is tracked in Git. It contains the corpus and all votes. Commit it again when you want a new snapshot of your preferences. SQLite's temporary `-wal` and `-shm` files are ignored.
+The database lives in `data/papers.sqlite3`. It contains the corpus, votes, generated profiles, and embeddings. It stays local and is ignored by Git because semantic indexes can grow substantially. SQLite's temporary `-wal` and `-shm` files are ignored too.
 
 ## Current sources
 
@@ -30,8 +33,24 @@ Feed URLs and source limits are in `sources.py`. Failed sources do not prevent t
 
 ## Ranking
 
-The initial rank mixes a topic-keyword prior, publication recency, and a small source-diversity bonus. After votes, it adds TF-IDF cosine similarity to liked items and subtracts similarity to passed items. The displayed fit score is a heuristic, not a calibrated probability. The corpus and vote history are kept independently so this ranker can later be replaced with embeddings, a learned model, or reconsideration of old downvotes.
+The legacy ranker remains available for rollback. It mixes a topic-keyword prior, recency, TF-IDF similarity to liked items, and distance from passed items.
 
-The **Network** view connects items whose text has high cosine similarity. These are content links, not citation links. The **Liked** view is positive-vote history, not a bookmark list.
+The semantic ranker uses a grounded profile generated for each document and stores both its structured JSON and the exact normalized profile text. `text-embedding-3-large` embeds that profile text at its full 3,072 dimensions as normalized float32. Interest matching uses only these profile embeddings. Exact matrix cosine search is sufficient for the current corpus size.
+
+Positive votes are reclustered from scratch into at most 18 interest groups. Negative votes remain ordinary vote rows; their candidate-specific penalty is calculated during ranking and is not persisted. The main score is 60% semantic relevance, 20% freshness, and 20% topic prior. Feed lanes allocate 60% to best matches, 30% to fresh material, and 10% to adjacent exploration. Depth, source repetition, and feed-local near-duplicate penalties are intentionally absent.
+
+Semantic data and ranker configuration are versioned independently. A new semantic version builds beside every prior version. It cannot be activated until it covers the full corpus, so the current active ranker continues serving during a rebuild. Once activated, daily new items can enter through freshness and topic prior until their profiles are added. Stored profile text can be reused when a later version changes only its embedding recipe.
+
+Indexing never runs from app startup, source refresh, or an API request. It starts only through the explicit CLI command:
+
+```bash
+python semantic.py status
+python semantic.py index --limit 40 --workers 3
+python semantic.py activate
+```
+
+Activation fails if coverage is incomplete. Optional LLM shortlist reranking is disabled by default. The displayed fit score is a heuristic, not a calibrated probability.
+
+The **Network** view connects items using the active ranker's content representation: TF-IDF in legacy mode and generated profile embeddings in semantic mode. These are content links, not citation links. The **Liked** view is positive-vote history, not a bookmark list.
 
 **Skip** (the center button or ↓) leaves no positive or negative preference signal. A skipped item is held out for the next 20 card decisions, then becomes eligible for the ranked feed again. Skips and their cooldowns are stored in the same SQLite database; right and left votes still permanently hide an item from Discover.
