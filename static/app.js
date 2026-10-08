@@ -46,7 +46,7 @@ function renderCard() {
     $('empty-refresh').onclick = refreshSources;
     return;
   }
-  const type = item.kind === 'paper' ? 'RESEARCH PAPER' : item.kind === 'hn' ? 'HACKER NEWS' : item.kind === 'x' ? 'LONG-FORM X POST' : 'IDEAS & WRITING';
+  const type = item.category === 'research_paper' ? 'RESEARCH PAPER' : item.category === 'twitter_article' ? 'TWITTER ARTICLE' : 'BLOG';
   const summary = item.summary || 'Open the original to read more.';
   card.innerHTML = `<div class="card-top"><div class="card-type"><i></i>${type}</div><div class="card-match"><strong>${item.match}/100</strong> fit · ${esc(item.why)}</div></div><h3 class="card-title">${esc(item.title)}</h3><p class="card-summary">${esc(summary)}</p><div class="card-bottom"><div class="card-meta"><span class="source-tag">${esc(item.source)}</span><span class="meta-text">${esc(item.author || '')}</span><span class="meta-sep">·</span><span class="meta-text">${formatDate(item.published)}</span></div><a class="open-link" href="${esc(item.url)}" target="_blank" rel="noopener noreferrer">Read original ↗</a></div><div class="swipe-stamp pass">LESS</div><div class="swipe-stamp save">MORE</div>`;
 }

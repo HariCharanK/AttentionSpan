@@ -26,7 +26,7 @@ Blogs and linked HN stories must have at least 2,000 characters of extracted art
 
 Feed URLs and source limits are in `sources.py`. Failed sources do not prevent the others from refreshing.
 
-`items.source` is the publisher shown in the app. The nullable `items.discovery_source` records where an item was first found, such as `x.com`, `Hacker News`, `slack #knowledge-sharing`, or `Manual Handpicked`. Existing records were backfilled from their ingestion adapters and known manual additions. Later refreshes preserve the first recorded discovery source.
+`items.category` records the content format: `research_paper`, `blog`, or `twitter_article`. `items.source` is the publisher shown in the app. The nullable `items.discovery_source` records where an item was first found, such as `x.com`, `Hacker News`, `slack #knowledge-sharing`, or `Manual Handpicked`. Existing records were backfilled from their ingestion adapters and known manual additions. Later refreshes preserve the first recorded discovery source. The legacy `kind` field remains an internal ingestion and ranking label, so Hacker News can be a discovery path while the linked item is categorized as a blog or paper.
 
 ## Ranking
 

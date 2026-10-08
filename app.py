@@ -69,6 +69,16 @@ def discovery_source(item: dict) -> str | None:
     return (urlparse(item["url"]).hostname or "").lower().removeprefix("www.") or None
 
 
+def content_category(item: dict) -> str:
+    """The item's format, independent of its publisher and discovery path."""
+    host = (urlparse(item["url"]).hostname or "").lower().removeprefix("www.")
+    if item["kind"] == "paper" or host == "arxiv.org":
+        return "research_paper"
+    if item["kind"] == "x" or host in {"x.com", "twitter.com"}:
+        return "twitter_article"
+    return "blog"
+
+
 def init_db() -> None:
     with connect() as con:
         con.executescript("""
@@ -77,7 +87,7 @@ def init_db() -> None:
               source TEXT NOT NULL, kind TEXT NOT NULL, summary TEXT NOT NULL,
               author TEXT NOT NULL, published TEXT NOT NULL, tags TEXT NOT NULL,
               added_at TEXT NOT NULL, content_chars INTEGER NOT NULL DEFAULT 0,
-              discovery_source TEXT
+              discovery_source TEXT, category TEXT NOT NULL
             );
             CREATE TABLE IF NOT EXISTS votes (
               item_id TEXT PRIMARY KEY REFERENCES items(id), vote INTEGER NOT NULL,
@@ -97,6 +107,13 @@ def init_db() -> None:
             for row in con.execute("SELECT id, url, kind FROM items"):
                 con.execute("UPDATE items SET discovery_source=? WHERE id=?",
                             (discovery_source(row), row["id"]))
+        if "category" not in {row[1] for row in con.execute("PRAGMA table_info(items)")}:
+            con.execute("ALTER TABLE items ADD COLUMN category TEXT")
+        for row in con.execute("""SELECT id, url, kind FROM items
+                                WHERE category IS NULL OR category NOT IN
+                                ('research_paper', 'blog', 'twitter_article')"""):
+            con.execute("UPDATE items SET category=? WHERE id=?",
+                        (content_category(row), row["id"]))
 
 
 def meta(con: sqlite3.Connection, key: str) -> str | None:
@@ -121,15 +138,17 @@ def refresh(force: bool = False) -> bool:
         now = datetime.now(timezone.utc).isoformat()
         with connect() as con:
             for item in items:
-                item = {**item, "discovery_source": discovery_source(item)}
+                item = {**item, "discovery_source": discovery_source(item),
+                        "category": content_category(item)}
                 con.execute("""INSERT INTO items
-                    (id,title,url,source,kind,summary,author,published,tags,added_at,content_chars,discovery_source)
-                    VALUES (:id,:title,:url,:source,:kind,:summary,:author,:published,:tags,:added_at,:content_chars,:discovery_source)
+                    (id,title,url,source,kind,summary,author,published,tags,added_at,content_chars,discovery_source,category)
+                    VALUES (:id,:title,:url,:source,:kind,:summary,:author,:published,:tags,:added_at,:content_chars,:discovery_source,:category)
                     ON CONFLICT(id) DO UPDATE SET
                     title=excluded.title, summary=excluded.summary,
                     author=excluded.author, tags=excluded.tags,
                     published=excluded.published, content_chars=excluded.content_chars,
-                    discovery_source=COALESCE(items.discovery_source, excluded.discovery_source)""", {**item, "added_at": now})
+                    discovery_source=COALESCE(items.discovery_source, excluded.discovery_source),
+                    category=excluded.category""", {**item, "added_at": now})
             con.execute("INSERT OR REPLACE INTO meta VALUES ('last_refresh', ?)", (str(time.time()),))
             con.execute("INSERT OR REPLACE INTO meta VALUES ('source_status', ?)", (json.dumps(statuses),))
             if backfill and len(items) >= 1000:
@@ -272,7 +291,8 @@ def network(items: list[dict], votes: dict[str, int], skips: dict[str, int], dec
         neighbors = sorted(((cosine(vecs[a["id"]], vecs[b["id"]]), b["id"]) for b in selected[i+1:]), reverse=True)[:3]
         edges.extend({"source": a["id"], "target": item_id, "weight": round(sim, 3)} for sim, item_id in neighbors if sim >= 0.15)
     return {"nodes": [{"id": x["id"], "title": x["title"], "source": x["source"],
-                        "kind": x["kind"], "url": x["url"], "saved": votes.get(x["id"]) == 1} for x in selected],
+                        "kind": x["kind"], "category": x["category"], "url": x["url"],
+                        "saved": votes.get(x["id"]) == 1} for x in selected],
             "edges": edges}
 
 
