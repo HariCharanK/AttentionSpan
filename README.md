@@ -53,7 +53,7 @@ python semantic.py index --limit 100 --workers 8
 python semantic.py activate
 ```
 
-The optional LLM shortlist reranker is disabled by default. The displayed fit score is a ranking heuristic rather than a calibrated probability.
+The LLM shortlist reranker is enabled by default. It uses `OPENAI_API_KEY` to rerank an uncached shortlist in the background; without a key, the feed keeps the local semantic ranking. Set `llm_rerank_enabled` to `0` in the local database's `meta` table to disable it. The displayed fit score is a ranking heuristic rather than a calibrated probability.
 
 ## Sources
 

@@ -302,9 +302,9 @@ def rerank_key(votes: dict[str, int], candidates: list[dict], semantic_version: 
 
 def apply_cached_rerank(ordered: list[dict], votes: dict[str, int], items: list[dict],
                         profiles: dict, semantic_version: str) -> list[dict]:
-    """Optionally reorder within lanes; disabled unless explicitly enabled in meta."""
+    """Reorder within lanes when a key is available, unless explicitly disabled."""
     with connect() as con:
-        enabled = meta(con, "llm_rerank_enabled") == "1"
+        enabled = meta(con, "llm_rerank_enabled") != "0"
         recommender_version = meta(con, "active_recommender_version") or RECOMMENDER_VERSION
     if not enabled or not votes:
         return ordered
