@@ -330,10 +330,11 @@ def item_rows_sql(con: sqlite3.Connection) -> str:
 
 def pending_items(con: sqlite3.Connection, semantic_version: str = SEMANTIC_VERSION,
                   limit: int | None = None) -> list[dict]:
+    votes_table = "catalog.votes" if "catalog" in {row[1] for row in con.execute("PRAGMA database_list")} else "votes"
     rows = [dict(row) for row in con.execute(f"""SELECT items.*, s.source_content_hash AS indexed_hash
         FROM ({item_rows_sql(con)}) items LEFT JOIN semantic_items s
           ON s.item_id=items.id AND s.semantic_version=?
-        ORDER BY CASE WHEN items.id IN (SELECT item_id FROM votes) THEN 0 ELSE 1 END,
+        ORDER BY CASE WHEN items.id IN (SELECT item_id FROM {votes_table}) THEN 0 ELSE 1 END,
                  items.published DESC""", (semantic_version,))]
     pending = [row for row in rows if row["indexed_hash"] != item_content_hash(row)]
     return pending[:limit] if limit is not None else pending

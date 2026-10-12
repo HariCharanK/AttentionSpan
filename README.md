@@ -32,10 +32,10 @@ AttentionSpan deliberately keeps two SQLite artifacts with different jobs:
 
 | File | Tracked | Contents |
 | --- | --- | --- |
-| `data/catalog.sqlite3` | Yes | Live public metadata: IDs, titles, URLs, publishers, authors, dates, categories, discovery paths, and content lengths |
-| `data/papers.sqlite3` | No | Local summaries, tags, votes, skips, reading state, extracted text, profiles, embeddings, and ranking cache |
+| `data/catalog.sqlite3` | Yes | Live public metadata and votes: IDs, titles, URLs, publishers, authors, dates, categories, discovery paths, content lengths, up/down preference signals, and vote timestamps |
+| `data/papers.sqlite3` | No | Local summaries, tags, skips, reading state, extracted text, profiles, embeddings, and ranking cache |
 
-The catalog is the metadata database used by the running app, rather than an exported copy. Source refreshes write metadata directly to it. AttentionSpan attaches it to the ignored local database and joins across both at this corpus size. Summaries and extracted article text stay local, along with all personal and generated state. Updating sources therefore updates the tracked catalog without a separate export or compression step.
+The catalog is the metadata and public taste database used by the running app, rather than an exported copy. Source refreshes and votes write directly to it. AttentionSpan attaches it to the ignored local database and joins across both at this corpus size. Summaries, extracted article text, reading state, skips, generated profiles, and embeddings stay local. Updating sources or voting changes the tracked catalog; commit and push it to publish those changes. Existing private votes move into the public catalog on startup.
 
 ## Ranking
 

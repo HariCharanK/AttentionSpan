@@ -41,8 +41,9 @@ def init_storage(connection: sqlite3.Connection) -> None:
           item_id TEXT PRIMARY KEY, summary TEXT NOT NULL DEFAULT '',
           tags TEXT NOT NULL DEFAULT '', added_at TEXT NOT NULL
         );
-        CREATE TABLE IF NOT EXISTS votes (
-          item_id TEXT PRIMARY KEY, vote INTEGER NOT NULL, voted_at TEXT NOT NULL
+        CREATE TABLE IF NOT EXISTS catalog.votes (
+          item_id TEXT PRIMARY KEY REFERENCES items(id),
+          vote INTEGER NOT NULL CHECK (vote IN (-1, 1)), voted_at TEXT NOT NULL
         );
         CREATE TABLE IF NOT EXISTS skips (
           item_id TEXT PRIMARY KEY, eligible_after INTEGER NOT NULL, skipped_at TEXT NOT NULL
@@ -68,6 +69,15 @@ def init_storage(connection: sqlite3.Connection) -> None:
             (item_id,summary,tags,added_at)
             SELECT id,summary,tags,added_at FROM main.items""")
         connection.execute("DROP TABLE main.items")
+    if connection.execute("""SELECT 1 FROM main.sqlite_master
+                           WHERE type='table' AND name='votes'""").fetchone():
+        missing = connection.execute("""SELECT COUNT(*) FROM main.votes
+            WHERE item_id NOT IN (SELECT id FROM catalog.items)""").fetchone()[0]
+        if missing:
+            raise RuntimeError(f"Cannot publish {missing} votes without catalog items")
+        connection.execute("""INSERT OR REPLACE INTO catalog.votes (item_id,vote,voted_at)
+            SELECT item_id,vote,voted_at FROM main.votes""")
+        connection.execute("DROP TABLE main.votes")
     count = connection.execute("SELECT COUNT(*) FROM catalog.items").fetchone()[0]
     if count >= 1000:
         connection.execute("INSERT OR IGNORE INTO meta VALUES ('long_form_backfill_v1', ?)",

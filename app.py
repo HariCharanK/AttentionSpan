@@ -250,9 +250,9 @@ def all_data() -> tuple[list[dict], dict[str, int], dict[str, int], int]:
         items = [dict(row) for row in con.execute(ITEMS_SELECT + """ WHERE
             i.kind = 'paper' OR (i.kind = 'x' AND i.content_chars >= ?) OR
             (i.kind IN ('blog','hn') AND i.content_chars >= ?) OR
-            i.id IN (SELECT item_id FROM votes) ORDER BY i.published DESC""",
+            i.id IN (SELECT item_id FROM catalog.votes) ORDER BY i.published DESC""",
             (MIN_X_CHARS, MIN_ARTICLE_CHARS))]
-        votes = {row["item_id"]: row["vote"] for row in con.execute("SELECT item_id,vote FROM votes")}
+        votes = {row["item_id"]: row["vote"] for row in con.execute("SELECT item_id,vote FROM catalog.votes")}
         skips = {row["item_id"]: row["eligible_after"] for row in con.execute("SELECT item_id,eligible_after FROM skips")}
         decision_count = int(meta(con, "decision_count") or 0)
     return items, votes, skips, decision_count
@@ -421,7 +421,7 @@ class Handler(SimpleHTTPRequestHandler):
                 con.execute("BEGIN IMMEDIATE")
                 if not con.execute("SELECT 1 FROM catalog.items WHERE id=?", (data["id"],)).fetchone():
                     return self.send_json({"error": "Unknown item"}, 404)
-                if con.execute("SELECT 1 FROM votes WHERE item_id=?", (data["id"],)).fetchone():
+                if con.execute("SELECT 1 FROM catalog.votes WHERE item_id=?", (data["id"],)).fetchone():
                     return self.send_json({"error": "Item already voted on"}, 409)
                 current = int(meta(con, "decision_count") or 0)
                 if path == "/api/skip" and (row := con.execute("SELECT eligible_after FROM skips WHERE item_id=?", (data["id"],)).fetchone()) and row[0] > current:
@@ -431,7 +431,7 @@ class Handler(SimpleHTTPRequestHandler):
                 if path == "/api/skip":
                     con.execute("INSERT OR REPLACE INTO skips VALUES (?,?,?)", (data["id"], decision_count + SKIP_COOLDOWN, datetime.now(timezone.utc).isoformat()))
                 else:
-                    con.execute("INSERT OR REPLACE INTO votes VALUES (?,?,?)", (data["id"], data["vote"], datetime.now(timezone.utc).isoformat()))
+                    con.execute("INSERT OR REPLACE INTO catalog.votes VALUES (?,?,?)", (data["id"], data["vote"], datetime.now(timezone.utc).isoformat()))
                     con.execute("DELETE FROM skips WHERE item_id=?", (data["id"],))
             return self.send_json({"ok": True})
         if path == "/api/read":
