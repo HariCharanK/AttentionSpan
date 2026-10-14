@@ -69,8 +69,6 @@ Blogs and HN links need at least 2,000 extracted characters to enter the feed. X
 
 `items.category` describes the format: `research_paper`, `blog`, or `twitter_article`. `items.source` is the publisher displayed in the app. `items.discovery_source` records the first discovery path, such as `x.com`, `Hacker News`, `slack #knowledge-sharing`, or `Manual Handpicked`. `items.added_at` records when a new item entered the catalog in UTC. Older catalog rows have `NULL` because their original insertion time is unknown; new inserts must supply it, and source refreshes preserve it.
 
-The reviewed language-model release paper selection is in `data/model_release_paper_selection.json`. Run `python import_model_release_papers.py` to import its arXiv papers idempotently, preserving existing catalog entries and votes. The importer stores paper abstracts in the local state database for reading and ranking.
-
 ## Interaction semantics
 
 - **Right:** a positive preference signal
