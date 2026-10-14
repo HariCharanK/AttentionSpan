@@ -1,0 +1,42 @@
+{
+  "scope": "Technical release papers for language models from Gemma, Llama, DeepSeek, Mistral, Inflection, and NVIDIA; reviewed 2026-10-14",
+  "selection_rule": "Include an original release paper or white paper that explains model architecture, training, data, or post-training methods. Exclude benchmark-only memos, pricing pages, and papers centered on speech, ASR, image generation, or video generation.",
+  "papers": {
+    "Gemma": [
+      "2403.08295", "2404.07839", "2406.11409", "2408.00118", "2503.19786", "2607.02770"
+    ],
+    "Llama": [
+      "2302.13971", "2307.09288", "2308.12950", "2407.21783"
+    ],
+    "DeepSeek": [
+      "2401.02954", "2401.06066", "2401.14196", "2402.03300", "2405.04434", "2405.14333",
+      "2406.11931", "2408.08152", "2412.19437", "2501.12948", "2504.21801", "2512.02556",
+      "2606.19348", "2609.19969"
+    ],
+    "Mistral": [
+      "2310.06825", "2401.04088", "2506.10910", "2509.25193", "2601.08584"
+    ],
+    "NVIDIA": [
+      "2201.11990", "2402.16819", "2406.11704", "2407.14679", "2504.03624", "2505.00949",
+      "2508.14444", "2508.15884", "2511.18890", "2512.13607", "2512.20848", "2512.20856",
+      "2603.19220", "2604.12374", "2606.15007"
+    ]
+  },
+  "reviewed_exclusions": [
+    {
+      "publisher": "Inflection",
+      "release": "Inflection-1, Inflection-2, Inflection-2.5, Inflection-3",
+      "reason": "No public release paper found with substantive architecture or training methods; the Inflection-1 technical memo is chiefly evaluation results."
+    },
+    {
+      "publisher": "Meta",
+      "release": "Llama 4",
+      "reason": "The release article has useful technical highlights but no standalone research paper or white paper found."
+    },
+    {
+      "publisher": "Google",
+      "release": "Gemma 3n",
+      "reason": "Technical model card and release articles found, but no standalone release research paper or white paper."
+    }
+  ]
+}
