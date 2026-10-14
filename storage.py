@@ -13,7 +13,7 @@ CATALOG_DB = Path(os.environ.get("ATTENTIONSPAN_CATALOG", ROOT / "data" / "catal
 ITEMS_SELECT = """
 SELECT i.id,i.title,i.url,i.source,i.kind,
        COALESCE(c.summary,'') AS summary,i.author,i.published,
-       COALESCE(c.tags,'') AS tags,COALESCE(c.added_at,'') AS added_at,
+       COALESCE(c.tags,'') AS tags,i.added_at,
        i.content_chars,i.discovery_source,i.category
 FROM catalog.items i LEFT JOIN item_content c ON c.item_id=i.id
 """
@@ -35,7 +35,7 @@ def init_storage(connection: sqlite3.Connection) -> None:
           id TEXT PRIMARY KEY, title TEXT NOT NULL, url TEXT NOT NULL,
           source TEXT NOT NULL, kind TEXT NOT NULL, author TEXT NOT NULL,
           published TEXT NOT NULL, content_chars INTEGER NOT NULL DEFAULT 0,
-          discovery_source TEXT, category TEXT NOT NULL
+          discovery_source TEXT, category TEXT NOT NULL, added_at TEXT
         ) WITHOUT ROWID;
         CREATE TABLE IF NOT EXISTS item_content (
           item_id TEXT PRIMARY KEY, summary TEXT NOT NULL DEFAULT '',
@@ -53,6 +53,17 @@ def init_storage(connection: sqlite3.Connection) -> None:
         );
         CREATE TABLE IF NOT EXISTS meta (key TEXT PRIMARY KEY, value TEXT NOT NULL);
     """)
+    catalog_columns = {row[1] for row in connection.execute("PRAGMA catalog.table_info(items)")}
+    if "added_at" not in catalog_columns:
+        connection.execute("ALTER TABLE catalog.items ADD COLUMN added_at TEXT")
+    connection.executescript("""
+        CREATE TRIGGER IF NOT EXISTS catalog.items_require_added_at
+        BEFORE INSERT ON items
+        WHEN NEW.added_at IS NULL OR trim(NEW.added_at) = ''
+        BEGIN
+          SELECT RAISE(ABORT, 'items.added_at is required');
+        END;
+    """)
     legacy_columns = {row[1] for row in connection.execute("PRAGMA main.table_info(items)")}
     if legacy_columns:
         required = {"id", "title", "url", "source", "kind", "summary", "author",
@@ -62,9 +73,9 @@ def init_storage(connection: sqlite3.Connection) -> None:
         if missing:
             raise RuntimeError(f"Legacy items table is missing: {', '.join(sorted(missing))}")
         connection.execute("""INSERT OR REPLACE INTO catalog.items
-            (id,title,url,source,kind,author,published,content_chars,discovery_source,category)
+            (id,title,url,source,kind,author,published,content_chars,discovery_source,category,added_at)
             SELECT id,title,url,source,kind,author,published,content_chars,
-                   discovery_source,category FROM main.items""")
+                   discovery_source,category,added_at FROM main.items""")
         connection.execute("""INSERT OR REPLACE INTO item_content
             (item_id,summary,tags,added_at)
             SELECT id,summary,tags,added_at FROM main.items""")

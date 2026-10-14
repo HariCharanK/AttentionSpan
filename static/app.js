@@ -45,7 +45,7 @@ function renderCard() {
   }
   const type = item.category === 'research_paper' ? 'RESEARCH PAPER' : item.category === 'twitter_article' ? 'TWITTER ARTICLE' : 'BLOG';
   const summary = item.summary || 'Open the original to read more.';
-  card.innerHTML = `<div class="card-top"><div class="card-type"><i></i>${type}</div><div class="card-match"><strong>${item.match}/100</strong> fit · ${esc(item.why)}</div></div><h3 class="card-title">${esc(item.title)}</h3><p class="card-summary">${esc(summary)}</p><div class="card-bottom"><div class="card-meta"><span class="source-tag">${esc(item.source)}</span><span class="meta-text">${esc(item.author || '')}</span><span class="meta-sep">·</span><span class="meta-text">${formatDate(item.published)}</span></div><a class="open-link" href="${esc(item.url)}" target="_blank" rel="noopener noreferrer">Read original ↗</a></div><div class="swipe-stamp pass">LESS</div><div class="swipe-stamp save">MORE</div>`;
+  card.innerHTML = `<div class="card-top"><div class="card-type"><i></i>${type}</div><div class="card-match"><strong>${item.match}/100</strong> fit · ${esc(item.why)}</div></div><h3 class="card-title">${esc(item.title)}</h3><p class="card-summary">${esc(summary)}</p><div class="card-bottom"><div class="card-meta"><span class="source-tag">${esc(item.source)}</span><span class="meta-text">${esc(item.author || '')}</span><span class="meta-sep">·</span><span class="meta-text">${formatDate(item.published)}</span>${item.added_at ? `<span class="meta-sep">·</span><span class="meta-text">Added ${formatDate(item.added_at)}</span>` : ''}</div><a class="open-link" href="${esc(item.url)}" target="_blank" rel="noopener noreferrer">Read original ↗</a></div><div class="swipe-stamp pass">LESS</div><div class="swipe-stamp save">MORE</div>`;
 }
 
 async function loadStats() { state.stats = await fetchJson('/api/stats'); renderStats(); }
@@ -105,7 +105,7 @@ function renderSaved() {
     $('saved-grid').innerHTML = '<div class="empty-card saved-empty"><span class="empty-star">✓</span><h3>Nothing here.</h3><p>Try another read filter.</p></div>';
     return;
   }
-  $('saved-grid').innerHTML = visible.map(item => `<article class="saved-item${item.read ? ' is-read' : ''}"><div class="saved-top"><span>${esc(item.source)}</span><span class="saved-date">${item.read ? 'READ · ' : ''}${formatDate(item.published)}</span></div><h3>${esc(item.title)}</h3><p>${esc(item.summary)}</p><div class="saved-actions"><a href="${esc(item.url)}" target="_blank" rel="noopener noreferrer">Read original ↗</a><button class="read-toggle" data-read-id="${esc(item.id)}" data-read-value="${item.read ? 'false' : 'true'}">${item.read ? 'Mark unread' : 'Mark as read'}</button></div></article>`).join('');
+  $('saved-grid').innerHTML = visible.map(item => `<article class="saved-item${item.read ? ' is-read' : ''}"><div class="saved-top"><span>${esc(item.source)}</span><span class="saved-date">${item.read ? 'READ · ' : ''}${formatDate(item.published)}${item.added_at ? ` · Added ${formatDate(item.added_at)}` : ''}</span></div><h3>${esc(item.title)}</h3><p>${esc(item.summary)}</p><div class="saved-actions"><a href="${esc(item.url)}" target="_blank" rel="noopener noreferrer">Read original ↗</a><button class="read-toggle" data-read-id="${esc(item.id)}" data-read-value="${item.read ? 'false' : 'true'}">${item.read ? 'Mark unread' : 'Mark as read'}</button></div></article>`).join('');
 }
 
 async function setReadState(id, read) {

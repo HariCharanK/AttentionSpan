@@ -2,7 +2,9 @@ import sqlite3
 import tempfile
 import unittest
 from pathlib import Path
+from unittest.mock import patch
 
+import app
 import storage
 
 
@@ -37,9 +39,9 @@ class SplitStorageTests(unittest.TestCase):
             ).fetchone())
             self.assertEqual(
                 tuple(connection.execute(
-                    "SELECT id,title,url,category FROM catalog.items"
+                    "SELECT id,title,url,category,added_at FROM catalog.items"
                 ).fetchone()),
-                ("item-1", "Title", "https://example.com", "blog"),
+                ("item-1", "Title", "https://example.com", "blog", "2026-01-02T00:00:00+00:00"),
             )
             self.assertEqual(
                 tuple(connection.execute(
@@ -64,6 +66,64 @@ class SplitStorageTests(unittest.TestCase):
                 self.assertEqual(public.execute("SELECT COUNT(*) FROM votes").fetchone()[0], 1)
             self.assertNotIn("summary", columns)
             self.assertNotIn("tags", columns)
+
+    def test_existing_catalog_dates_remain_unknown_and_new_inserts_require_date(self):
+        with tempfile.TemporaryDirectory() as folder:
+            state = Path(folder) / "state.sqlite3"
+            catalog = Path(folder) / "catalog.sqlite3"
+            with sqlite3.connect(catalog) as public:
+                public.executescript("""
+                    CREATE TABLE items (
+                      id TEXT PRIMARY KEY, title TEXT NOT NULL, url TEXT NOT NULL,
+                      source TEXT NOT NULL, kind TEXT NOT NULL, author TEXT NOT NULL,
+                      published TEXT NOT NULL, content_chars INTEGER NOT NULL,
+                      discovery_source TEXT, category TEXT NOT NULL
+                    ) WITHOUT ROWID;
+                    INSERT INTO items VALUES
+                      ('old','Old','https://example.com/old','Example','blog','Author',
+                       '2026-01-01T00:00:00+00:00',100,'Feed','blog');
+                """)
+            with storage.connect_databases(state, catalog) as connection:
+                storage.init_storage(connection)
+                self.assertIsNone(connection.execute(
+                    "SELECT added_at FROM catalog.items WHERE id='old'"
+                ).fetchone()[0])
+                with self.assertRaisesRegex(sqlite3.IntegrityError, "added_at is required"):
+                    connection.execute("""INSERT INTO catalog.items
+                        (id,title,url,source,kind,author,published,content_chars,category)
+                        VALUES ('new','New','https://example.com/new','Example','blog','Author',
+                                '2026-01-01T00:00:00+00:00',100,'blog')""")
+                connection.execute("""INSERT INTO catalog.items
+                    (id,title,url,source,kind,author,published,content_chars,category,added_at)
+                    VALUES ('new','New','https://example.com/new','Example','blog','Author',
+                            '2026-01-01T00:00:00+00:00',100,'blog','2026-10-14T00:00:00+00:00')""")
+                self.assertEqual(connection.execute(
+                    "SELECT added_at FROM catalog.items WHERE id='new'"
+                ).fetchone()[0], "2026-10-14T00:00:00+00:00")
+                storage.init_storage(connection)
+
+    def test_refresh_keeps_first_added_date(self):
+        with tempfile.TemporaryDirectory() as folder:
+            state = Path(folder) / "state.sqlite3"
+            catalog = Path(folder) / "catalog.sqlite3"
+            item = {"id": "example", "title": "Example", "url": "https://example.com/post",
+                    "source": "Example", "kind": "blog", "author": "Author",
+                    "published": "2026-01-01T00:00:00+00:00", "content_chars": 2000,
+                    "summary": "First summary", "tags": "systems"}
+            with patch.object(app, "DB", state), patch.object(app, "CATALOG", catalog), \
+                    patch.object(app, "collect", return_value=([item], {})):
+                app.init_db()
+                self.assertTrue(app.refresh(force=True))
+                with storage.connect_databases(state, catalog) as connection:
+                    connection.execute("UPDATE catalog.items SET added_at='2026-01-02T00:00:00+00:00'")
+                    connection.execute("UPDATE item_content SET added_at='2026-01-02T00:00:00+00:00'")
+                self.assertTrue(app.refresh(force=True))
+                with storage.connect_databases(state, catalog) as connection:
+                    row = connection.execute(storage.ITEMS_SELECT).fetchone()
+                    self.assertEqual(row["added_at"], "2026-01-02T00:00:00+00:00")
+                    self.assertEqual(connection.execute(
+                        "SELECT added_at FROM item_content"
+                    ).fetchone()[0], "2026-01-02T00:00:00+00:00")
 
 
 if __name__ == "__main__":

@@ -115,19 +115,19 @@ def refresh(force: bool = False) -> bool:
         with connect() as con:
             for item in items:
                 item = {**item, "discovery_source": discovery_source(item),
-                        "category": content_category(item)}
+                        "category": content_category(item), "added_at": now}
                 con.execute("""INSERT INTO catalog.items
-                    (id,title,url,source,kind,author,published,content_chars,discovery_source,category)
-                    VALUES (:id,:title,:url,:source,:kind,:author,:published,:content_chars,:discovery_source,:category)
+                    (id,title,url,source,kind,author,published,content_chars,discovery_source,category,added_at)
+                    VALUES (:id,:title,:url,:source,:kind,:author,:published,:content_chars,:discovery_source,:category,:added_at)
                     ON CONFLICT(id) DO UPDATE SET
                     title=excluded.title, author=excluded.author,
                     published=excluded.published, content_chars=excluded.content_chars,
                     discovery_source=COALESCE(items.discovery_source, excluded.discovery_source),
-                    category=excluded.category""", {**item, "added_at": now})
+                    category=excluded.category""", item)
                 con.execute("""INSERT INTO item_content (item_id,summary,tags,added_at)
                     VALUES (:id,:summary,:tags,:added_at)
                     ON CONFLICT(item_id) DO UPDATE SET summary=excluded.summary,
-                    tags=excluded.tags,added_at=excluded.added_at""", {**item, "added_at": now})
+                    tags=excluded.tags""", item)
             con.execute("INSERT OR REPLACE INTO meta VALUES ('last_refresh', ?)", (str(time.time()),))
             con.execute("INSERT OR REPLACE INTO meta VALUES ('source_status', ?)", (json.dumps(statuses),))
             if backfill and len(items) >= 1000:
