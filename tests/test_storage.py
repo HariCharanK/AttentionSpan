@@ -111,7 +111,8 @@ class SplitStorageTests(unittest.TestCase):
                     "published": "2026-01-01T00:00:00+00:00", "content_chars": 2000,
                     "summary": "First summary", "tags": "systems"}
             with patch.object(app, "DB", state), patch.object(app, "CATALOG", catalog), \
-                    patch.object(app, "collect", return_value=([item], {})):
+                    patch.object(app, "collect", return_value=([item], {})), \
+                    patch.object(app, "queue_indexing") as queued:
                 app.init_db()
                 self.assertTrue(app.refresh(force=True))
                 with storage.connect_databases(state, catalog) as connection:
@@ -124,6 +125,7 @@ class SplitStorageTests(unittest.TestCase):
                     self.assertEqual(connection.execute(
                         "SELECT added_at FROM item_content"
                     ).fetchone()[0], "2026-01-02T00:00:00+00:00")
+                self.assertEqual(queued.call_count, 2)
 
 
 if __name__ == "__main__":

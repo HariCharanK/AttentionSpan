@@ -24,7 +24,7 @@ function renderStats() {
   $('progress-fill').style.width = `${s.total ? (100 * (s.saved + s.passed) / s.total) : 0}%`;
   $('skip-button').hidden = !s.skip_cooldown;
   if (s.skip_cooldown) $('skip-button').title = `Skip for now; may return after ${s.skip_cooldown} other choices`;
-  $('update-label').textContent = s.refreshing ? 'Gathering fresh ideas…' : s.last_refresh ? `Updated ${formatDate(s.last_refresh * 1000)}` : 'Waiting for first refresh…';
+  $('update-label').textContent = s.refreshing ? 'Gathering fresh ideas…' : s.semantic?.indexing ? 'Indexing new ideas…' : (s.semantic?.last_index_result?.error || s.semantic?.last_index_result?.failed) ? 'Indexing paused' : s.last_refresh ? `Updated ${formatDate(s.last_refresh * 1000)}` : 'Waiting for first refresh…';
   $('refresh-button').disabled = !!s.refreshing;
   const sources = Object.entries(s.sources || {}).sort((a,b) => a[0].localeCompare(b[0]));
   const working = sources.filter(([,result]) => !result.startsWith('error')).length;
@@ -185,11 +185,27 @@ let polling = false;
 async function pollRefresh() {
   if (polling) return;
   polling = true;
+  let sourcesDone = false;
+  let sawIndexing = false;
   try {
     while (true) {
       await new Promise(resolve => setTimeout(resolve, 3000));
       await loadStats();
-      if (!state.stats.refreshing) { await loadFeed(); if (state.view === 'saved') await loadSaved(); if (state.view === 'network') await loadNetwork(); break; }
+      if (!state.stats.refreshing && !sourcesDone) {
+        sourcesDone = true;
+        await loadFeed();
+        if (state.view === 'saved') await loadSaved();
+        if (state.view === 'network') await loadNetwork();
+      }
+      if (state.stats.semantic?.indexing) sawIndexing = true;
+      if (sourcesDone && !state.stats.semantic?.indexing) {
+        if (sawIndexing) {
+          await loadFeed();
+          if (state.view === 'saved') await loadSaved();
+          if (state.view === 'network') await loadNetwork();
+        }
+        break;
+      }
     }
   } finally { polling = false; }
 }

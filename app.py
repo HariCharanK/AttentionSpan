@@ -18,7 +18,7 @@ from urllib.parse import parse_qs, parse_qsl, urlencode, urlparse
 from recommender import (load_representations, preference_network,
                          rank as semantic_rank)
 from semantic import (RECOMMENDER_VERSION, RERANK_MODEL, RERANK_PROMPT_VERSION,
-                      api_key, coverage as semantic_coverage, init_schema,
+                      api_key, coverage as semantic_coverage, index_pending, init_schema,
                       rerank as llm_rerank)
 from sources import MIN_ARTICLE_CHARS, MIN_X_CHARS, collect
 from storage import CATALOG_DB, ITEMS_SELECT, STATE_DB, connect_databases, init_storage
@@ -31,6 +31,9 @@ REFRESH_SECONDS = 24 * 60 * 60
 SKIP_COOLDOWN = 20  # Other card decisions before a skipped item is eligible again.
 refresh_lock = threading.Lock()
 refresh_status = {"running": False, "last_result": {}}
+index_lock = threading.Lock()
+index_requested = threading.Event()
+index_status = {"running": False, "last_result": {}}
 rerank_lock = threading.Lock()
 representation_cache = {"key": None, "vectors": {}, "profiles": {}}
 
@@ -97,6 +100,45 @@ def meta(con: sqlite3.Connection, key: str) -> str | None:
     return row[0] if row else None
 
 
+def index_after_refresh() -> None:
+    index_status["running"] = True
+    index_status["last_result"] = {}
+    try:
+        while True:
+            index_requested.clear()
+            con = connect()
+            try:
+                complete = semantic_coverage(con)["complete"]
+            finally:
+                con.close()
+            if complete:
+                if index_requested.is_set():
+                    continue
+                break
+            result = index_pending(DB, limit=100, workers=4, catalog_path=CATALOG)
+            index_status["last_result"] = result
+            if result.get("error") or result.get("failed") or not result.get("indexed"):
+                break
+    except Exception as exc:
+        index_status["last_result"] = {"error": str(exc)}
+    finally:
+        index_status["running"] = False
+        index_lock.release()
+        if index_requested.is_set():
+            queue_indexing()
+
+
+def queue_indexing() -> None:
+    """Coalesce refresh requests into one background indexing worker."""
+    index_requested.set()
+    if index_lock.acquire(blocking=False):
+        try:
+            threading.Thread(target=index_after_refresh, daemon=True).start()
+        except Exception:
+            index_lock.release()
+            raise
+
+
 def refresh(force: bool = False) -> bool:
     if not refresh_lock.acquire(blocking=False):
         return False
@@ -110,6 +152,7 @@ def refresh(force: bool = False) -> bool:
         items, statuses = collect(backfill=backfill)
         if not items:
             refresh_status["last_result"] = {"fetched": 0, "sources": statuses}
+            queue_indexing()
             return False
         now = datetime.now(timezone.utc).isoformat()
         with connect() as con:
@@ -133,6 +176,7 @@ def refresh(force: bool = False) -> bool:
             if backfill and len(items) >= 1000:
                 con.execute("INSERT OR REPLACE INTO meta VALUES ('long_form_backfill_v1', ?)", (now,))
         refresh_status["last_result"] = {"fetched": len(items), "sources": statuses}
+        queue_indexing()
         return True
     except Exception as exc:
         refresh_status["last_result"] = {"error": str(exc)}
@@ -400,7 +444,9 @@ class Handler(SimpleHTTPRequestHandler):
                                    "cooling": sum(item_id not in votes and eligible > decision_count for item_id, eligible in skips.items()),
                                    "skip_cooldown": SKIP_COOLDOWN,
                                    "semantic": {**semantic_state, "active": active_semantic,
-                                                "indexing_enabled": False},
+                                                "indexing_enabled": bool(api_key()),
+                                                "indexing": index_status["running"],
+                                                "last_index_result": index_status["last_result"]},
                                    "refreshing": refresh_status["running"], "last_refresh": float(last) if last else None,
                                    "sources": sources, "last_result": refresh_status["last_result"]})
         return self.send_json({"error": "Not found"}, 404)

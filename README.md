@@ -45,7 +45,7 @@ Positive votes are reclustered from scratch into at most 18 interest groups. Neg
 
 Semantic versions build beside the active version and cannot be activated until they cover the complete corpus. The legacy TF-IDF ranker remains available when no semantic version is active.
 
-Indexing is explicit and requires `OPENAI_API_KEY`:
+Source refreshes queue pending semantic indexing in the background when an `OPENAI_API_KEY` is available. The refresh response remains quick, and `/api/stats` reports indexing progress and errors. To inspect or run indexing manually:
 
 ```bash
 python semantic.py status
