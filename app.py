@@ -20,7 +20,7 @@ from recommender import (load_representations, preference_network,
 from semantic import (RECOMMENDER_VERSION, RERANK_MODEL, RERANK_PROMPT_VERSION,
                       api_key, coverage as semantic_coverage, index_pending, init_schema,
                       rerank as llm_rerank)
-from sources import MIN_ARTICLE_CHARS, MIN_X_CHARS, collect
+from sources import HIDDEN_ARXIV_CATEGORIES, MIN_ARTICLE_CHARS, MIN_X_CHARS, collect
 from storage import CATALOG_DB, ITEMS_SELECT, STATE_DB, connect_databases, init_storage
 
 ROOT = Path(__file__).resolve().parent
@@ -28,6 +28,7 @@ DB = STATE_DB
 CATALOG = CATALOG_DB
 PORT = int(os.environ.get("ATTENTIONSPAN_PORT", "8765"))
 REFRESH_SECONDS = 24 * 60 * 60
+AUTO_REFRESH_ENABLED = False  # Pause scheduled refreshes; manual refresh stays available.
 SKIP_COOLDOWN = 20  # Other card decisions before a skipped item is eligible again.
 refresh_lock = threading.Lock()
 refresh_status = {"running": False, "last_result": {}}
@@ -302,6 +303,16 @@ def all_data() -> tuple[list[dict], dict[str, int], dict[str, int], int]:
     return items, votes, skips, decision_count
 
 
+def visible_feed_items(items: list[dict], votes: dict[str, int]) -> list[dict]:
+    """Hide broad arXiv topics while retaining manual picks and voted items."""
+    return [item for item in items if not (
+        item["kind"] == "paper"
+        and item["tags"] in HIDDEN_ARXIV_CATEGORIES
+        and item["discovery_source"] != "Manual Handpicked"
+        and item["id"] not in votes
+    )]
+
+
 def legacy_network(items: list[dict], votes: dict[str, int], skips: dict[str, int], decision_count: int) -> dict:
     ordered = legacy_rank(items, votes, limit=48, skips=skips, decision_count=decision_count)
     saved = [item for item in items if votes.get(item["id"]) == 1]
@@ -409,6 +420,7 @@ class Handler(SimpleHTTPRequestHandler):
             return super().do_GET()
         items, votes, skips, decision_count = all_data()
         if path == "/api/feed":
+            items = visible_feed_items(items, votes)
             version, semantic_vectors, profiles = active_representations()
             if version:
                 ordered = semantic_rank(items, votes, semantic_vectors, profiles,
@@ -426,6 +438,7 @@ class Handler(SimpleHTTPRequestHandler):
                      for x in items if votes.get(x["id"]) == 1]
             return self.send_json({"items": sorted(liked, key=lambda x: x["published"], reverse=True)})
         if path == "/api/network":
+            items = visible_feed_items(items, votes)
             version, semantic_vectors, profiles = active_representations()
             if version:
                 ordered = semantic_rank(items, votes, semantic_vectors, profiles, limit=45,
@@ -502,7 +515,8 @@ class Handler(SimpleHTTPRequestHandler):
 
 if __name__ == "__main__":
     init_db()
-    threading.Thread(target=background_loop, daemon=True).start()
+    if AUTO_REFRESH_ENABLED:
+        threading.Thread(target=background_loop, daemon=True).start()
     server = ThreadingHTTPServer(("127.0.0.1", PORT), Handler)
     print(f"AttentionSpan: http://127.0.0.1:{PORT}", flush=True)
     try:

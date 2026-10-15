@@ -129,6 +129,9 @@ ARXIV_BACKFILL_LIMITS = {
     "cs.DB": 300, "cs.SE": 300, "cs.PF": 300, "cs.DS": 300, "q-bio.QM": 300,
 }
 
+# Keep these broad categories out of source refreshes and the default feed.
+HIDDEN_ARXIV_CATEGORIES = frozenset({"cs.CR", "q-bio.QM"})
+
 
 def fetch(url: str, timeout: int = 25) -> bytes:
     req = Request(url, headers={"User-Agent": "Mozilla/5.0 (compatible; AttentionSpan/0.1; personal reader)", "Accept": "application/atom+xml, application/rss+xml, application/json, text/html, */*"})
@@ -500,6 +503,8 @@ def collect(backfill: bool = False) -> tuple[list[dict], dict[str, str]]:
     items, status = [], {}
     # arXiv requests are sequential to respect its request cadence.
     for cat, backfill_limit in ARXIV_BACKFILL_LIMITS.items():
+        if cat in HIDDEN_ARXIV_CATEGORIES:
+            continue
         try:
             batch = arxiv_category(cat, backfill_limit if backfill else
                                    90 if cat in ("cs.AI", "cs.LG", "cs.CL", "stat.ML") else 45)

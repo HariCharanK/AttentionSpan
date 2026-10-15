@@ -24,7 +24,9 @@ python app.py
 
 Open <http://127.0.0.1:8765>.
 
-The checked-in catalog gives a new clone an immediate feed. AttentionSpan then refreshes source metadata in the background when the last fetch is more than 24 hours old. Use **Refresh sources** to request one manually.
+The checked-in catalog gives a new clone an immediate feed. Scheduled source refreshes are temporarily paused (`AUTO_REFRESH_ENABLED = False` in `app.py`). Use **Refresh sources** to request one manually; that still indexes any pending items in the background.
+
+Broad arXiv security (`cs.CR`) and quantitative biology (`q-bio.QM`) categories are skipped during source refresh and hidden from the default feed. Existing records stay in the catalog; manually selected and voted papers remain visible.
 
 ## Public catalog and local state
 
