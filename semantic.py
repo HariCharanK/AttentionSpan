@@ -170,8 +170,8 @@ def source_text(item: dict) -> tuple[str, str]:
     url = item["url"]
     if item["kind"] == "hn" and urlparse(url).netloc in ("news.ycombinator.com", "www.news.ycombinator.com"):
         return fallback, "excerpt"
-    if item["category"] == "research_paper" and "arxiv.org/abs/" in url:
-        url = url.replace("/abs/", "/html/")
+    if item["category"] == "research_paper" and "arxiv.org/" in url:
+        url = url.replace("/abs/", "/html/").replace("/pdf/", "/html/")
     try:
         page = ReadableText()
         page.feed(fetch(url, timeout=22).decode("utf-8", "replace"))

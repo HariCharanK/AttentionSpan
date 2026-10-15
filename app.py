@@ -30,6 +30,7 @@ PORT = int(os.environ.get("ATTENTIONSPAN_PORT", "8765"))
 REFRESH_SECONDS = 24 * 60 * 60
 AUTO_REFRESH_ENABLED = False  # Pause scheduled refreshes; manual refresh stays available.
 SKIP_COOLDOWN = 20  # Other card decisions before a skipped item is eligible again.
+FEED_MOODS = {"all": None, "papers": "paper", "x": "x", "blogs": "blog", "hacker-news": "hn"}
 refresh_lock = threading.Lock()
 refresh_status = {"running": False, "last_result": {}}
 index_lock = threading.Lock()
@@ -225,7 +226,8 @@ def item_identity(item: dict) -> tuple[str, str]:
 
 
 def legacy_rank(items: list[dict], votes: dict[str, int], limit: int = 120,
-                skips: dict[str, int] | None = None, decision_count: int = 0) -> list[dict]:
+                skips: dict[str, int] | None = None, decision_count: int = 0,
+                candidate_ids: set[str] | None = None) -> list[dict]:
     vecs = vectors(items)
     liked = [vecs[item_id] for item_id, vote in votes.items() if vote == 1 and item_id in vecs]
     passed = [vecs[item_id] for item_id, vote in votes.items() if vote == -1 and item_id in vecs]
@@ -244,6 +246,8 @@ def legacy_rank(items: list[dict], votes: dict[str, int], limit: int = 120,
         return item["source"]
     scored = []
     for item in items:
+        if candidate_ids is not None and item["id"] not in candidate_ids:
+            continue
         if item["id"] in votes or (skips or {}).get(item["id"], 0) > decision_count:
             continue
         if any(identity in voted_identities or identity in cooling_identities
@@ -311,6 +315,11 @@ def visible_feed_items(items: list[dict], votes: dict[str, int]) -> list[dict]:
         and item["discovery_source"] != "Manual Handpicked"
         and item["id"] not in votes
     )]
+
+
+def items_for_mood(items: list[dict], mood: str) -> list[dict]:
+    kind = FEED_MOODS[mood]
+    return items if kind is None else [item for item in items if item["kind"] == kind]
 
 
 def legacy_network(items: list[dict], votes: dict[str, int], skips: dict[str, int], decision_count: int) -> dict:
@@ -420,16 +429,21 @@ class Handler(SimpleHTTPRequestHandler):
             return super().do_GET()
         items, votes, skips, decision_count = all_data()
         if path == "/api/feed":
+            mood = parse_qs(urlparse(self.path).query).get("mood", ["all"])[0]
+            if mood not in FEED_MOODS:
+                return self.send_json({"error": "Unknown feed mood"}, 400)
             items = visible_feed_items(items, votes)
+            candidates = items_for_mood(items, mood)
             version, semantic_vectors, profiles = active_representations()
             if version:
-                ordered = semantic_rank(items, votes, semantic_vectors, profiles,
+                ordered = semantic_rank(candidates, votes, semantic_vectors, profiles,
                                         skips=skips, decision_count=decision_count)
                 ordered = apply_cached_rerank(ordered, votes, items, profiles, version)
                 return self.send_json({"items": ordered, "recommender": "semantic",
                                        "semantic_version": version})
             return self.send_json({"items": legacy_rank(items, votes, skips=skips,
-                                                        decision_count=decision_count),
+                                                        decision_count=decision_count,
+                                                        candidate_ids={item["id"] for item in candidates}),
                                    "recommender": "legacy"})
         if path in ("/api/liked", "/api/saved"):
             with connect() as con:

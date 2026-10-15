@@ -1,4 +1,7 @@
-const state = {feed: [], saved: [], readFilter: 'all', stats: null, busy: false, decisionRevision: 0, feedRefreshInFlight: null, pendingFeed: null, votedIds: new Set(), skippedUntil: new Map(), view: 'discover', graph: null, graphRaf: null};
+const MOODS = ['all', 'papers', 'x', 'blogs', 'hacker-news'];
+const MOOD_LABELS = {all: 'Everything', papers: 'Research papers', x: 'X long form', blogs: 'Blogs', 'hacker-news': 'Hacker News'};
+const savedMood = (() => { try { return localStorage.getItem('attentionspan-mood'); } catch { return null; } })();
+const state = {feed: [], mood: MOODS.includes(savedMood) ? savedMood : 'all', feedGeneration: 0, feedLoading: false, saved: [], readFilter: 'all', stats: null, busy: false, decisionRevision: 0, feedRefreshInFlight: null, pendingFeed: null, votedIds: new Set(), skippedUntil: new Map(), view: 'discover', graph: null, graphRaf: null};
 const $ = id => document.getElementById(id);
 const esc = value => String(value ?? '').replace(/[&<>"']/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
 const formatDate = iso => { try { return new Date(iso).toLocaleDateString(undefined, {month:'short', day:'numeric', year:'numeric'}); } catch { return ''; } };
@@ -37,10 +40,18 @@ function renderCard() {
   const item = state.feed[0];
   card.className = 'swipe-card';
   $('pass-button').disabled = $('skip-button').disabled = $('save-button').disabled = !item || state.busy;
+  $('mood-toggle').disabled = state.busy;
+  document.querySelectorAll('[data-mood]').forEach(button => { button.disabled = state.busy; });
   if (!item) {
     const cooling = state.stats?.cooling || 0;
-    card.innerHTML = `<div class="empty-card"><span class="empty-star">✳</span><h3>${state.stats?.refreshing ? 'Gathering your stack…' : cooling ? 'Your skips are cooling down.' : 'You’re all caught up.'}</h3><p>${state.stats?.refreshing ? 'The first source refresh is underway. New papers and posts will appear shortly.' : cooling ? `${cooling} skipped ${cooling === 1 ? 'item can' : 'items can'} return after more choices. Refresh sources for new ideas in the meantime.` : 'Every item in this batch has had its turn. Refresh the sources to find more.'}</p><button id="empty-refresh">Refresh sources</button></div>`;
-    $('empty-refresh').onclick = refreshSources;
+    if (state.feedLoading) {
+      card.innerHTML = '<div class="empty-card"><span class="empty-star">✳</span><h3>Finding your next read…</h3></div>';
+    } else if (state.mood !== 'all') {
+      card.innerHTML = '<div class="empty-card"><span class="empty-star">✳</span><h3>Nothing in this moode yet.</h3><p>Try another moode or refresh sources for new ideas.</p><button id="empty-refresh">Refresh sources</button></div>';
+    } else {
+      card.innerHTML = `<div class="empty-card"><span class="empty-star">✳</span><h3>${state.stats?.refreshing ? 'Gathering your stack…' : cooling ? 'Your skips are cooling down.' : 'You’re all caught up.'}</h3><p>${state.stats?.refreshing ? 'The first source refresh is underway. New papers and posts will appear shortly.' : cooling ? `${cooling} skipped ${cooling === 1 ? 'item can' : 'items can'} return after more choices. Refresh sources for new ideas in the meantime.` : 'Every item in this batch has had its turn. Refresh the sources to find more.'}</p><button id="empty-refresh">Refresh sources</button></div>`;
+    }
+    if ($('empty-refresh')) $('empty-refresh').onclick = refreshSources;
     return;
   }
   const type = item.category === 'research_paper' ? 'RESEARCH PAPER' : item.category === 'twitter_article' ? 'TWITTER ARTICLE' : 'BLOG';
@@ -49,7 +60,55 @@ function renderCard() {
 }
 
 async function loadStats() { state.stats = await fetchJson('/api/stats'); renderStats(); }
-async function loadFeed() { state.feed = (await fetchJson('/api/feed')).items; renderCard(); renderStats(); }
+const feedUrl = mood => `/api/feed?mood=${encodeURIComponent(mood)}`;
+function closeMoodMenu(restoreFocus = false) {
+  $('mood-menu').hidden = true;
+  $('mood-toggle').setAttribute('aria-expanded', 'false');
+  if (restoreFocus) $('mood-toggle').focus();
+}
+
+function toggleMoodMenu() {
+  const menu = $('mood-menu');
+  menu.hidden = !menu.hidden;
+  $('mood-toggle').setAttribute('aria-expanded', String(!menu.hidden));
+  if (!menu.hidden) menu.querySelector('.active')?.focus();
+}
+
+async function loadFeed() {
+  const generation = ++state.feedGeneration;
+  const mood = state.mood;
+  const result = await fetchJson(feedUrl(mood));
+  if (generation !== state.feedGeneration || mood !== state.mood) return;
+  state.feed = result.items;
+  state.feedLoading = false;
+  renderCard(); renderStats();
+}
+
+async function setMood(mood) {
+  closeMoodMenu(true);
+  if (state.busy || mood === state.mood || !MOODS.includes(mood)) return;
+  state.mood = mood;
+  $('mood-current').textContent = MOOD_LABELS[mood];
+  try { localStorage.setItem('attentionspan-mood', mood); } catch { /* Browsers may disable storage. */ }
+  document.querySelectorAll('[data-mood]').forEach(button => {
+    const active = button.dataset.mood === mood;
+    button.classList.toggle('active', active);
+    button.setAttribute('aria-pressed', String(active));
+  });
+  state.pendingFeed = null;
+  state.feedRefreshInFlight = null;
+  state.feed = [];
+  state.feedLoading = true;
+  renderCard();
+  const request = loadFeed();
+  const generation = state.feedGeneration;
+  try { await request; }
+  catch (error) {
+    if (mood !== state.mood || generation !== state.feedGeneration) return;
+    state.feedLoading = false;
+    $('swipe-card').innerHTML = `<div class="empty-card"><h3>Could not load the feed.</h3><p>${esc(error.message)}</p></div>`;
+  }
+}
 
 function applyRefreshedFeed(refreshed) {
   const visible = state.feed[0];
@@ -63,13 +122,17 @@ function applyRefreshedFeed(refreshed) {
 
 function requestFeedRefresh() {
   if (state.feedRefreshInFlight) return;
-  state.feedRefreshInFlight = fetchJson('/api/feed')
+  const mood = state.mood;
+  const generation = state.feedGeneration;
+  const request = fetchJson(feedUrl(mood))
     .then(refreshed => {
+      if (mood !== state.mood || generation !== state.feedGeneration) return;
       if (state.busy) state.pendingFeed = refreshed;
       else applyRefreshedFeed(refreshed);
     })
     .catch(error => console.warn('Background feed refresh failed:', error))
-    .finally(() => { state.feedRefreshInFlight = null; });
+    .finally(() => { if (state.feedRefreshInFlight === request) state.feedRefreshInFlight = null; });
+  state.feedRefreshInFlight = request;
 }
 
 async function refreshAfterDecision(revision, requestFeed) {
@@ -212,6 +275,8 @@ async function pollRefresh() {
 
 async function setView(view) {
   state.view = view;
+  closeMoodMenu();
+  $('mood-picker').hidden = view !== 'discover';
   document.querySelectorAll('[data-view]').forEach(el => el.classList.toggle('active', el.dataset.view === view));
   document.querySelectorAll('.view').forEach(el => el.classList.toggle('active', el.id === `view-${view}`));
   if (view === 'saved') await loadSaved();
@@ -272,9 +337,20 @@ function drawNetwork() {
 
 async function boot() {
   $('today').textContent = new Date().toLocaleDateString(undefined,{weekday:'short',month:'short',day:'numeric'});
+  $('mood-current').textContent = MOOD_LABELS[state.mood];
+  $('mood-toggle').onclick = toggleMoodMenu;
+  document.addEventListener('pointerdown', event => {
+    if (!event.target.closest('#mood-picker')) closeMoodMenu();
+  });
   $('pass-button').onclick = () => decide(-1); $('skip-button').onclick = () => decide(0); $('save-button').onclick = () => decide(1);
   $('refresh-button').onclick = refreshSources;
   document.querySelectorAll('[data-view]').forEach(el => el.onclick = () => setView(el.dataset.view));
+  document.querySelectorAll('[data-mood]').forEach(el => {
+    const active = el.dataset.mood === state.mood;
+    el.classList.toggle('active', active);
+    el.setAttribute('aria-pressed', String(active));
+    el.onclick = () => setMood(el.dataset.mood);
+  });
   document.querySelectorAll('[data-read-filter]').forEach(el => el.onclick = () => { state.readFilter = el.dataset.readFilter; renderSaved(); });
   $('saved-grid').addEventListener('click', async event => {
     const button = event.target.closest('[data-read-id]');
@@ -283,7 +359,13 @@ async function boot() {
     try { await setReadState(button.dataset.readId, button.dataset.readValue === 'true'); }
     catch (error) { button.disabled = false; alert(`Could not update read status: ${error.message}`); }
   });
-  document.addEventListener('keydown', e => {if(state.view !== 'discover' || e.target.matches('input,textarea'))return;if(e.key==='ArrowLeft')decide(-1);if(e.key==='ArrowDown' && state.stats?.skip_cooldown){e.preventDefault();decide(0);}if(e.key==='ArrowRight')decide(1);});
+  document.addEventListener('keydown', e => {
+    if (e.key === 'Escape' && !$('mood-menu').hidden) { closeMoodMenu(true); return; }
+    if (state.view !== 'discover' || !$('mood-menu').hidden || e.target.closest('button,a,input,textarea,select')) return;
+    if (e.key === 'ArrowLeft') decide(-1);
+    if (e.key === 'ArrowDown' && state.stats?.skip_cooldown) { e.preventDefault(); decide(0); }
+    if (e.key === 'ArrowRight') decide(1);
+  });
   setupDrag();
   window.addEventListener('resize',()=>{if(state.view==='network')drawNetwork();});
   try {await loadStats(); await loadFeed(); if(state.stats.refreshing)pollRefresh();}
