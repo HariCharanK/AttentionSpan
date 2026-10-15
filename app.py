@@ -31,6 +31,14 @@ REFRESH_SECONDS = 24 * 60 * 60
 AUTO_REFRESH_ENABLED = False  # Pause scheduled refreshes; manual refresh stays available.
 SKIP_COOLDOWN = 20  # Other card decisions before a skipped item is eligible again.
 FEED_MOODS = {"all": None, "papers": "paper", "x": "x", "blogs": "blog", "hacker-news": "hn"}
+FEED_TOPICS = {
+    "all": None,
+    "llms": re.compile(r"\b(?:llms?|large language models?|language models?|foundation models?|transformers?|gpt|claude|llama|gemini|deepseek|qwen|mistral)\b", re.I),
+    "agents": re.compile(r"\b(?:ai agents?|llm agents?|autonomous agents?|coding agents?|agentic|computer use|tool use|tool calling|multi-agent)\b", re.I),
+    "distributed-systems": re.compile(r"\b(?:distributed systems?|distributed storage|distributed databases?|distributed computing|data replication|replicated storage|consensus algorithms?|distributed consensus|fault toleran\w*|durable objects?|raft|paxos|sharding|cluster scheduling)\b", re.I),
+    "databases": re.compile(r"\b(?:databases?|sql|nosql|postgres(?:ql)?|sqlite|dynamodb|query engines?|query optimiz\w*|database transactions?|transaction processing|storage engines?|vector databases?)\b", re.I),
+    "interpretability": re.compile(r"\b(?:interpretability|explainab\w*|mechanistic|polysemantic\w*|monosemantic\w*|sparse autoencoders?|neuron explanations?|feature visualization|activation steering|causal tracing)\b", re.I),
+}
 refresh_lock = threading.Lock()
 refresh_status = {"running": False, "last_result": {}}
 index_lock = threading.Lock()
@@ -322,6 +330,21 @@ def items_for_mood(items: list[dict], mood: str) -> list[dict]:
     return items if kind is None else [item for item in items if item["kind"] == kind]
 
 
+def items_for_topic(items: list[dict], topic: str, profiles: dict[str, dict] | None = None) -> list[dict]:
+    pattern = FEED_TOPICS[topic]
+    if pattern is None:
+        return items
+    profiles = profiles or {}
+    def matches(item: dict) -> bool:
+        profile = profiles.get(item["id"], {})
+        text = " ".join((item.get("title", ""), item.get("summary", "")[:1200],
+                         item.get("tags", ""), profile.get("gist", ""),
+                         profile.get("cluster_label", ""),
+                         " ".join(profile.get("themes", []))))
+        return bool(pattern.search(text))
+    return [item for item in items if matches(item)]
+
+
 def legacy_network(items: list[dict], votes: dict[str, int], skips: dict[str, int], decision_count: int) -> dict:
     ordered = legacy_rank(items, votes, limit=48, skips=skips, decision_count=decision_count)
     saved = [item for item in items if votes.get(item["id"]) == 1]
@@ -429,12 +452,16 @@ class Handler(SimpleHTTPRequestHandler):
             return super().do_GET()
         items, votes, skips, decision_count = all_data()
         if path == "/api/feed":
-            mood = parse_qs(urlparse(self.path).query).get("mood", ["all"])[0]
+            filters = parse_qs(urlparse(self.path).query)
+            mood = filters.get("mood", ["all"])[0]
+            topic = filters.get("topic", ["all"])[0]
             if mood not in FEED_MOODS:
                 return self.send_json({"error": "Unknown feed mood"}, 400)
+            if topic not in FEED_TOPICS:
+                return self.send_json({"error": "Unknown feed topic"}, 400)
             items = visible_feed_items(items, votes)
-            candidates = items_for_mood(items, mood)
             version, semantic_vectors, profiles = active_representations()
+            candidates = items_for_topic(items_for_mood(items, mood), topic, profiles)
             if version:
                 ordered = semantic_rank(candidates, votes, semantic_vectors, profiles,
                                         skips=skips, decision_count=decision_count)

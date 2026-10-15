@@ -20,9 +20,23 @@ class FeedMoodTests(unittest.TestCase):
             self.assertEqual(app.items_for_mood(items, mood), [{"id": kind, "kind": kind}])
         self.assertEqual(len(items), 4)
 
+    def test_topics_match_metadata_and_semantic_profiles(self):
+        items = [
+            {"id": "cells", "title": "Durable Objects and replication", "summary": "", "tags": ""},
+            {"id": "model", "title": "A language model", "summary": "", "tags": ""},
+            {"id": "profiled", "title": "A technical paper", "summary": "", "tags": ""},
+        ]
+        profiles = {"profiled": {"themes": ["distributed systems", "fault tolerance"]}}
+        self.assertEqual([item["id"] for item in app.items_for_topic(items, "distributed-systems", profiles)],
+                         ["cells", "profiled"])
+        self.assertEqual([item["id"] for item in app.items_for_topic(items, "llms", profiles)], ["model"])
+        self.assertEqual(app.items_for_topic(items, "all", profiles), items)
+
     def test_feed_endpoint_filters_before_ranking_and_rejects_unknown_moods(self):
-        items = [{"id": kind, "kind": kind, "tags": "", "discovery_source": "source"}
-                 for kind in ("paper", "x", "blog", "hn")]
+        titles = {"paper": "A language model", "x": "AI agents with tools",
+                  "blog": "Distributed systems with replication", "hn": "A SQLite database"}
+        items = [{"id": kind, "kind": kind, "title": titles[kind], "tags": "",
+                  "discovery_source": "source"} for kind in ("paper", "x", "blog", "hn")]
         server = ThreadingHTTPServer(("127.0.0.1", 0), app.Handler)
         worker = threading.Thread(target=server.serve_forever, daemon=True)
         worker.start()
@@ -39,8 +53,16 @@ class FeedMoodTests(unittest.TestCase):
                                        ("blogs", "blog"), ("hacker-news", "hn")):
                     with urlopen(f"{base}?mood={mood}") as response:
                         self.assertEqual([item["id"] for item in json.load(response)["items"]], [expected])
+                with urlopen(f"{base}?mood=blogs&topic=distributed-systems") as response:
+                    self.assertEqual([item["id"] for item in json.load(response)["items"]], ["blog"])
+                with urlopen(f"{base}?mood=blogs&topic=llms") as response:
+                    self.assertEqual(json.load(response)["items"], [])
                 with self.assertRaises(HTTPError) as error:
                     urlopen(f"{base}?mood=unknown")
+                self.assertEqual(error.exception.code, 400)
+                error.exception.close()
+                with self.assertRaises(HTTPError) as error:
+                    urlopen(f"{base}?topic=unknown")
                 self.assertEqual(error.exception.code, 400)
                 error.exception.close()
             with patch.object(app, "all_data", return_value=(items, {}, {}, 0)), \
@@ -49,6 +71,8 @@ class FeedMoodTests(unittest.TestCase):
                     patch.object(app, "apply_cached_rerank", side_effect=lambda ranked, *args: ranked):
                 with urlopen(f"{base}?mood=papers") as response:
                     self.assertEqual([item["id"] for item in json.load(response)["items"]], ["paper"])
+                with urlopen(f"{base}?topic=distributed-systems") as response:
+                    self.assertEqual([item["id"] for item in json.load(response)["items"]], ["blog"])
         finally:
             server.shutdown()
             server.server_close()

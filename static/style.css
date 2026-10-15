@@ -28,12 +28,14 @@
 .mood-toggle-text strong{font-size:11px;font-weight:720;color:#e6f4ff;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
 .mood-chevron{font-size:18px;line-height:1;color:#82a8be;align-self:center;transition:transform .18s}
 .mood-toggle[aria-expanded="true"] .mood-chevron{transform:rotate(180deg)}
-.mood-menu{position:absolute;top:calc(100% + 10px);right:0;width:256px;padding:7px;border:1px solid #33495a;border-radius:17px;background:#111b23;box-shadow:0 22px 58px #000c,0 0 0 1px #ffffff08;z-index:30}
+.mood-menu{position:absolute;top:calc(100% + 10px);right:0;width:278px;max-height:min(680px,calc(100dvh - 85px));overflow-y:auto;scrollbar-width:thin;padding:7px;border:1px solid #33495a;border-radius:17px;background:#111b23;box-shadow:0 22px 58px #000c,0 0 0 1px #ffffff08;z-index:30}
 .mood-menu-head{display:flex;flex-direction:column;gap:4px;padding:13px 13px 11px;border-bottom:1px solid #293a46;margin-bottom:4px}
 .mood-menu-head span{font-size:9px;font-weight:800;letter-spacing:1.65px;color:#75c8ff}
 .mood-menu-head small{font-size:10px;color:#8398a7}
+.mood-section-label{padding:10px 11px 5px;font-size:8px;font-weight:800;letter-spacing:1.55px;color:#7994a6}
+.mood-topic-label{border-top:1px solid #293a46;margin-top:6px;padding-top:13px}
 .mood-options{display:grid;gap:2px}
-.mood-options button{width:100%;display:flex;align-items:center;gap:11px;min-height:41px;padding:6px 9px;border:1px solid transparent;border-radius:10px;background:transparent;color:#bdcbd5;font-size:11px;font-weight:650;text-align:left}
+.mood-options button{width:100%;display:flex;align-items:center;gap:11px;min-height:38px;padding:5px 9px;border:1px solid transparent;border-radius:10px;background:transparent;color:#bdcbd5;font-size:11px;font-weight:650;text-align:left}
 .mood-options button:hover{background:#1a2c39;color:#e7f5ff}
 .mood-options button.active{background:#103149;color:#d9efff;border-color:#245875}
 .mood-option-icon{width:25px;height:25px;display:grid;place-items:center;flex:none;border-radius:7px;background:#21313c;color:#9cb6c7;font-size:15px;font-weight:650}
@@ -41,4 +43,4 @@
 .mood-check{margin-left:auto;color:#7acbfa;font-size:13px;opacity:0}
 .mood-options button.active .mood-check{opacity:1}
 .mood-options button:disabled{opacity:.55;cursor:default}
-@media(max-width:650px){.topbar-right{gap:10px}.today{display:none}.mood-toggle{min-width:144px;height:39px}.mood-menu{right:-36px;width:min(256px,calc(100vw - 30px))}}
+@media(max-width:650px){.topbar-right{gap:10px}.today{display:none}.mood-toggle{min-width:144px;height:39px}.mood-menu{right:-36px;width:min(278px,calc(100vw - 30px));max-height:calc(100dvh - 130px)}}

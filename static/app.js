@@ -1,7 +1,10 @@
 const MOODS = ['all', 'papers', 'x', 'blogs', 'hacker-news'];
 const MOOD_LABELS = {all: 'Everything', papers: 'Research papers', x: 'X long form', blogs: 'Blogs', 'hacker-news': 'Hacker News'};
+const TOPICS = ['all', 'llms', 'agents', 'distributed-systems', 'databases', 'interpretability'];
+const TOPIC_LABELS = {all: 'Any topic', llms: 'LLMs', agents: 'AI agents', 'distributed-systems': 'Distributed systems', databases: 'Databases', interpretability: 'Interpretability'};
 const savedMood = (() => { try { return localStorage.getItem('attentionspan-mood'); } catch { return null; } })();
-const state = {feed: [], mood: MOODS.includes(savedMood) ? savedMood : 'all', feedGeneration: 0, feedLoading: false, saved: [], readFilter: 'all', stats: null, busy: false, decisionRevision: 0, feedRefreshInFlight: null, pendingFeed: null, votedIds: new Set(), skippedUntil: new Map(), view: 'discover', graph: null, graphRaf: null};
+const savedTopic = (() => { try { return localStorage.getItem('attentionspan-topic'); } catch { return null; } })();
+const state = {feed: [], mood: MOODS.includes(savedMood) ? savedMood : 'all', topic: TOPICS.includes(savedTopic) ? savedTopic : 'all', feedGeneration: 0, feedLoading: false, saved: [], readFilter: 'all', stats: null, busy: false, decisionRevision: 0, feedRefreshInFlight: null, pendingFeed: null, votedIds: new Set(), skippedUntil: new Map(), view: 'discover', graph: null, graphRaf: null};
 const $ = id => document.getElementById(id);
 const esc = value => String(value ?? '').replace(/[&<>"']/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
 const formatDate = iso => { try { return new Date(iso).toLocaleDateString(undefined, {month:'short', day:'numeric', year:'numeric'}); } catch { return ''; } };
@@ -41,13 +44,13 @@ function renderCard() {
   card.className = 'swipe-card';
   $('pass-button').disabled = $('skip-button').disabled = $('save-button').disabled = !item || state.busy;
   $('mood-toggle').disabled = state.busy;
-  document.querySelectorAll('[data-mood]').forEach(button => { button.disabled = state.busy; });
+  document.querySelectorAll('[data-mood],[data-topic]').forEach(button => { button.disabled = state.busy; });
   if (!item) {
     const cooling = state.stats?.cooling || 0;
     if (state.feedLoading) {
       card.innerHTML = '<div class="empty-card"><span class="empty-star">✳</span><h3>Finding your next read…</h3></div>';
-    } else if (state.mood !== 'all') {
-      card.innerHTML = '<div class="empty-card"><span class="empty-star">✳</span><h3>Nothing in this moode yet.</h3><p>Try another moode or refresh sources for new ideas.</p><button id="empty-refresh">Refresh sources</button></div>';
+    } else if (state.mood !== 'all' || state.topic !== 'all') {
+      card.innerHTML = '<div class="empty-card"><span class="empty-star">✳</span><h3>Nothing in this moode yet.</h3><p>Try another content type or topic, or refresh sources for new ideas.</p><button id="empty-refresh">Refresh sources</button></div>';
     } else {
       card.innerHTML = `<div class="empty-card"><span class="empty-star">✳</span><h3>${state.stats?.refreshing ? 'Gathering your stack…' : cooling ? 'Your skips are cooling down.' : 'You’re all caught up.'}</h3><p>${state.stats?.refreshing ? 'The first source refresh is underway. New papers and posts will appear shortly.' : cooling ? `${cooling} skipped ${cooling === 1 ? 'item can' : 'items can'} return after more choices. Refresh sources for new ideas in the meantime.` : 'Every item in this batch has had its turn. Refresh the sources to find more.'}</p><button id="empty-refresh">Refresh sources</button></div>`;
     }
@@ -60,7 +63,18 @@ function renderCard() {
 }
 
 async function loadStats() { state.stats = await fetchJson('/api/stats'); renderStats(); }
-const feedUrl = mood => `/api/feed?mood=${encodeURIComponent(mood)}`;
+const feedUrl = (mood, topic) => `/api/feed?${new URLSearchParams({mood, topic})}`;
+const filterLabel = () => state.topic === 'all' ? MOOD_LABELS[state.mood] : state.mood === 'all' ? TOPIC_LABELS[state.topic] : `${MOOD_LABELS[state.mood]} · ${TOPIC_LABELS[state.topic]}`;
+function renderFilterSelection() {
+  const label = filterLabel();
+  $('mood-current').textContent = label;
+  $('mood-toggle').title = label;
+  document.querySelectorAll('[data-mood],[data-topic]').forEach(button => {
+    const active = button.dataset.mood === state.mood || button.dataset.topic === state.topic;
+    button.classList.toggle('active', active);
+    button.setAttribute('aria-pressed', String(active));
+  });
+}
 function closeMoodMenu(restoreFocus = false) {
   $('mood-menu').hidden = true;
   $('mood-toggle').setAttribute('aria-expanded', 'false');
@@ -71,30 +85,27 @@ function toggleMoodMenu() {
   const menu = $('mood-menu');
   menu.hidden = !menu.hidden;
   $('mood-toggle').setAttribute('aria-expanded', String(!menu.hidden));
-  if (!menu.hidden) menu.querySelector('.active')?.focus();
+  if (!menu.hidden) menu.querySelector(state.topic === 'all' ? '[data-mood].active' : '[data-topic].active')?.focus();
 }
 
 async function loadFeed() {
   const generation = ++state.feedGeneration;
   const mood = state.mood;
-  const result = await fetchJson(feedUrl(mood));
-  if (generation !== state.feedGeneration || mood !== state.mood) return;
+  const topic = state.topic;
+  const result = await fetchJson(feedUrl(mood, topic));
+  if (generation !== state.feedGeneration || mood !== state.mood || topic !== state.topic) return;
   state.feed = result.items;
   state.feedLoading = false;
   renderCard(); renderStats();
 }
 
-async function setMood(mood) {
+async function setFeedFilter(name, value) {
   closeMoodMenu(true);
-  if (state.busy || mood === state.mood || !MOODS.includes(mood)) return;
-  state.mood = mood;
-  $('mood-current').textContent = MOOD_LABELS[mood];
-  try { localStorage.setItem('attentionspan-mood', mood); } catch { /* Browsers may disable storage. */ }
-  document.querySelectorAll('[data-mood]').forEach(button => {
-    const active = button.dataset.mood === mood;
-    button.classList.toggle('active', active);
-    button.setAttribute('aria-pressed', String(active));
-  });
+  const allowed = name === 'mood' ? MOODS : TOPICS;
+  if (state.busy || value === state[name] || !allowed.includes(value)) return;
+  state[name] = value;
+  try { localStorage.setItem(`attentionspan-${name}`, value); } catch { /* Browsers may disable storage. */ }
+  renderFilterSelection();
   state.pendingFeed = null;
   state.feedRefreshInFlight = null;
   state.feed = [];
@@ -104,7 +115,7 @@ async function setMood(mood) {
   const generation = state.feedGeneration;
   try { await request; }
   catch (error) {
-    if (mood !== state.mood || generation !== state.feedGeneration) return;
+    if (generation !== state.feedGeneration) return;
     state.feedLoading = false;
     $('swipe-card').innerHTML = `<div class="empty-card"><h3>Could not load the feed.</h3><p>${esc(error.message)}</p></div>`;
   }
@@ -123,10 +134,11 @@ function applyRefreshedFeed(refreshed) {
 function requestFeedRefresh() {
   if (state.feedRefreshInFlight) return;
   const mood = state.mood;
+  const topic = state.topic;
   const generation = state.feedGeneration;
-  const request = fetchJson(feedUrl(mood))
+  const request = fetchJson(feedUrl(mood, topic))
     .then(refreshed => {
-      if (mood !== state.mood || generation !== state.feedGeneration) return;
+      if (mood !== state.mood || topic !== state.topic || generation !== state.feedGeneration) return;
       if (state.busy) state.pendingFeed = refreshed;
       else applyRefreshedFeed(refreshed);
     })
@@ -337,7 +349,7 @@ function drawNetwork() {
 
 async function boot() {
   $('today').textContent = new Date().toLocaleDateString(undefined,{weekday:'short',month:'short',day:'numeric'});
-  $('mood-current').textContent = MOOD_LABELS[state.mood];
+  renderFilterSelection();
   $('mood-toggle').onclick = toggleMoodMenu;
   document.addEventListener('pointerdown', event => {
     if (!event.target.closest('#mood-picker')) closeMoodMenu();
@@ -346,10 +358,10 @@ async function boot() {
   $('refresh-button').onclick = refreshSources;
   document.querySelectorAll('[data-view]').forEach(el => el.onclick = () => setView(el.dataset.view));
   document.querySelectorAll('[data-mood]').forEach(el => {
-    const active = el.dataset.mood === state.mood;
-    el.classList.toggle('active', active);
-    el.setAttribute('aria-pressed', String(active));
-    el.onclick = () => setMood(el.dataset.mood);
+    el.onclick = () => setFeedFilter('mood', el.dataset.mood);
+  });
+  document.querySelectorAll('[data-topic]').forEach(el => {
+    el.onclick = () => setFeedFilter('topic', el.dataset.topic);
   });
   document.querySelectorAll('[data-read-filter]').forEach(el => el.onclick = () => { state.readFilter = el.dataset.readFilter; renderSaved(); });
   $('saved-grid').addEventListener('click', async event => {

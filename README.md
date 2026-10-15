@@ -4,7 +4,7 @@ A local, swipe-first semantic recommender for research papers, engineering blogs
 
 Swipe right to ask for more like an item and left to ask for less. A vote is a preference signal; it does not imply that you read, saved, or endorsed the item. Voted items leave the discovery feed, and every decision updates the next ranking.
 
-Use the **Moode** menu in the top right to see Everything, Research papers, X long form, Blogs, or Hacker News. The choice is saved in your browser and filters candidates before ranking. Your votes continue to shape recommendations across all moodes; Liked and Network remain global.
+Use the **Moode** menu in the top right to combine a content type (Everything, Research papers, X long form, Blogs, or Hacker News) with a topic (LLMs, AI agents, Distributed systems, Databases, or Interpretability). Both choices are saved in your browser. The feed filters candidates by content type and topic before running the full ranking. Topics are inferred from each item's title, summary, tags, and semantic profile, so an item may appear in more than one topic. Your votes continue to shape recommendations across all moodes; Liked and Network remain global.
 
 ## What it does
 
